@@ -72,4 +72,83 @@ func _build() -> void:
 	visor.mesh = BoxMesh.new(); visor.mesh.size = Vector3(0.2, 0.06, 0.05)
 	visor.material_override = _mat(Color(0.05, 0.05, 0.1), 0.2, 0.7, Color(0.8, 0.1, 0.1), 1.6)
 	visor.position = Vector3(0, 1.26, 0.13)
-	// rider.add_child(visor)
+	rider.add_child(visor)
+	# mustache — every one of them
+	var stache = MeshInstance3D.new()
+	stache.mesh = BoxMesh.new(); stache.mesh.size = Vector3(0.16, 0.03, 0.03)
+	stache.material_override = _mat(Color(0.09, 0.06, 0.04), 0.9)
+	stache.position = Vector3(0, 1.2, 0.13)
+	rider.add_child(stache)
+	# rim light so the black rider reads at night
+	var rim = OmniLight3D.new()
+	rim.light_color = Color(0.65, 0.75, 1); rim.light_energy = 1.4; rim.omni_range = 6
+	rim.position = Vector3(0, 2.2, 0.8)
+	add_child(rim)
+	# hitbox on layer 2 for the player's ray
+	hitbox = Area3D.new()
+	hitbox.collision_layer = 2
+	hitbox.collision_mask = 0
+	var cs = CollisionShape3D.new()
+	var box = BoxShape3D.new(); box.size = Vector3(1.1, 2.1, 2.0)
+	cs.shape = box; cs.position = Vector3(0, 1.0, 0)
+	hitbox.add_child(cs)
+	hitbox.set_meta("enemy", self)
+	add_child(hitbox)
+	var sc = 1.45 if boss else 1.3
+	scale = Vector3.ONE * sc
+
+func take_damage(dmg: int, at: Vector3) -> void:
+	if not alive: return
+	hp -= dmg
+	Gore.blood_burst(get_parent(), at, 30)
+	if hp <= 0:
+		die()
+
+func die() -> void:
+	if not alive: return
+	alive = false
+	var head_pos = head.global_position
+	head.visible = false
+	Gore.blood_burst(get_parent(), head_pos, 90)
+	Gore.head_split(get_parent(), head_pos)
+	Gore.chunks(get_parent(), head_pos, 8)
+	main.on_enemy_killed(self)
+	if boss:
+		main.hud.floater("KILLER IS DEAD", Color.RED, 40)
+	elif randf() < 0.25:
+		main.hud.floater("HEAD SPLIT!", Color(1, 0.4, 0.4), 20)
+	queue_free()
+
+func _taunt() -> void:
+	taunted = true
+	var l = Label3D.new()
+	l.text = main.TAUNTS[randi() % main.TAUNTS.size()]
+	l.font_size = 48
+	l.modulate = Color(1, 0.6, 0.2)
+	l.position = Vector3(0, 2.8, 0)
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	add_child(l)
+	get_tree().create_timer(2.2).timeout.connect(l.queue_free)
+	get_tree().create_timer(8.0).timeout.connect(func(): taunted = false)
+
+func _process(delta: float) -> void:
+	if main.state != main.S.RIDE or not alive:
+		return
+	var wdt = delta
+	var on_foot_brawl = main.player.on_foot and not boss
+	if on_foot_brawl and position.z > -14:
+		# circle her like a pack
+		var ang = weave_phase * 0.5
+		var ring = Vector3(sin(ang) * 6.5, 0, -cos(ang) * 6.5 - 2)
+		position = position.lerp(ring, min(1.0, delta * 2))
+		look_at(main.player.global_position * Vector3(1, 0, 1), Vector3.UP)
+	else:
+		position.z += (11.0 + speed) * wdt
+		weave_phase += wdt * 2.4
+		position.x = base_x + sin(weave_phase) * weave_amp
+	if not taunted and not boss and position.z > -90 and position.z < -12 and randf() < wdt * 0.25:
+		_taunt()
+	if position.z > -1.5 and not on_foot_brawl:
+		main.on_player_rammed(25 if boss else 11)
+		main.enemies.erase(self)
+		queue_free()
