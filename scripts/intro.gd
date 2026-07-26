@@ -4,6 +4,7 @@ extends Node3D
 ## Any key skips straight to the finish (hands off to main.start_run()).
 
 const Gore = preload("res://scripts/gore.gd")
+const Models = preload("res://scripts/model_loader.gd")
 
 const OX := 100.0            # diorama offset from the play area
 const SKATE_FROM := -24.0    # girl road path (z)
@@ -18,7 +19,8 @@ var _done := false
 var cam: Camera3D
 var girl: Node3D
 var board: Node3D
-var girl_head: MeshInstance3D
+var girl_head: Node3D
+var horse: Node3D
 var brows: Array = []
 var eyes: Array = []
 var nostrils: Array = []
@@ -47,6 +49,7 @@ func _ready() -> void:
 	_build_board()
 	_build_bikes()
 	_build_graveyard()
+	_build_horse()
 	# cinematic camera takes over; player cam is restored on finish
 	cam = Camera3D.new()
 	cam.fov = 58
@@ -77,43 +80,55 @@ func _build_girl() -> void:
 	girl = Node3D.new()
 	girl.position = Vector3(OX, 0, SKATE_FROM)
 	add_child(girl)
-	# white dress — the one she was buried in
-	var body = MeshInstance3D.new()
-	body.mesh = CapsuleMesh.new(); body.mesh.radius = 0.22; body.mesh.height = 1.15
-	body.material_override = _mat(Color(0.9, 0.88, 0.86), 0.85)
-	body.position = Vector3(0, 0.9, 0)
-	girl.add_child(body)
+	var head_y := 1.45
+	var model = Models.inst("res://assets/characters/girl.glb")
+	if model != null:
+		# REAL GIRL — rigged Kenney skater, skating home
+		Models.fit_height(model, 1.55)
+		girl.add_child(model)
+		Models.play_anim(model, ["skate", "drive", "sprint", "run", "walk", "idle"])
+		var ga = Models.combined_aabb(model)
+		if ga.size.y > 0.01:
+			head_y = ga.position.y + ga.size.y - 0.12
+	else:
+		# fallback silhouette — white dress, the one she was buried in
+		var body = MeshInstance3D.new()
+		body.mesh = CapsuleMesh.new(); body.mesh.radius = 0.22; body.mesh.height = 1.15
+		body.material_override = _mat(Color(0.9, 0.88, 0.86), 0.85)
+		body.position = Vector3(0, 0.9, 0)
+		girl.add_child(body)
+	# face anchor on her head (rig head node if exposed, else measured head height)
+	var anchor = Node3D.new()
+	var head_node = Models.find_named(model, "head") if model != null else null
+	if head_node != null:
+		head_node.add_child(anchor)
+		var hs = head_node.global_transform.basis.get_scale()
+		if hs.x > 0.001:
+			anchor.scale = Vector3.ONE / hs
+	else:
+		girl.add_child(anchor)
+		anchor.position = Vector3(0, head_y, 0)
+	girl_head = anchor
 	var skin = _mat(Color(0.85, 0.7, 0.6), 0.8)
-	girl_head = MeshInstance3D.new()
-	girl_head.mesh = SphereMesh.new(); girl_head.mesh.radius = 0.16; girl_head.mesh.height = 0.32
-	girl_head.mesh.radial_segments = 16; girl_head.mesh.rings = 8
-	girl_head.material_override = skin
-	girl_head.position = Vector3(0, 1.62, 0)
-	girl.add_child(girl_head)
-	var hair = MeshInstance3D.new()
-	hair.mesh = SphereMesh.new(); hair.mesh.radius = 0.17; hair.mesh.height = 0.34
-	hair.material_override = _mat(Color(0.12, 0.08, 0.05), 0.95)
-	hair.position = Vector3(0, 1.66, -0.045)
-	girl.add_child(hair)
 	# face (faces +z): eyes, brows, nostrils — animated in the close-up
 	for i in [-1, 1]:
 		var eye = MeshInstance3D.new()
 		eye.mesh = SphereMesh.new(); eye.mesh.radius = 0.026; eye.mesh.height = 0.052
 		eye.material_override = _mat(Color(0.08, 0.08, 0.1), 0.4)
-		eye.position = Vector3(i * 0.06, 1.63, 0.145)
-		girl.add_child(eye)
+		eye.position = Vector3(i * 0.06, 0.03, 0.15)
+		anchor.add_child(eye)
 		eyes.append(eye)
 		var brow = MeshInstance3D.new()
 		brow.mesh = BoxMesh.new(); brow.mesh.size = Vector3(0.065, 0.016, 0.02)
 		brow.material_override = _mat(Color(0.1, 0.07, 0.04), 0.9)
-		brow.position = Vector3(i * 0.06, 1.685, 0.145)
-		girl.add_child(brow)
+		brow.position = Vector3(i * 0.06, 0.085, 0.15)
+		anchor.add_child(brow)
 		brows.append(brow)
 		var nos = MeshInstance3D.new()
 		nos.mesh = SphereMesh.new(); nos.mesh.radius = 0.013; nos.mesh.height = 0.026
 		nos.material_override = skin
-		nos.position = Vector3(i * 0.024, 1.585, 0.155)
-		girl.add_child(nos)
+		nos.position = Vector3(i * 0.024, -0.045, 0.16)
+		anchor.add_child(nos)
 		nostrils.append(nos)
 
 func _build_board() -> void:
@@ -140,29 +155,19 @@ func _build_bikes() -> void:
 		var b = Node3D.new()
 		b.position = Vector3(OX - 1.5 + i * 3.0, 0, -42)
 		add_child(b)
-		var dark = _mat(Color(0.07, 0.07, 0.09), 0.5, 0.4)
-		for z in [-0.5, 0.55]:
-			var w = MeshInstance3D.new()
-			var tm = TorusMesh.new(); tm.inner_radius = 0.185; tm.outer_radius = 0.26
-			w.mesh = tm; w.material_override = _mat(Color(0.05, 0.05, 0.06), 0.9)
-			w.position = Vector3(0, 0.26, z)
-			b.add_child(w)
-		var frame = MeshInstance3D.new()
-		frame.mesh = BoxMesh.new(); frame.mesh.size = Vector3(0.14, 0.18, 0.9)
-		frame.material_override = dark
-		frame.position = Vector3(0, 0.55, 0.02)
-		b.add_child(frame)
-		# silhouetted rider
-		var torso = MeshInstance3D.new()
-		torso.mesh = CapsuleMesh.new(); torso.mesh.radius = 0.17; torso.mesh.height = 0.6
-		torso.material_override = dark
-		torso.position = Vector3(0, 1.05, -0.1)
-		b.add_child(torso)
-		var head = MeshInstance3D.new()
-		head.mesh = SphereMesh.new(); head.mesh.radius = 0.14; head.mesh.height = 0.28
-		head.material_override = dark
-		head.position = Vector3(0, 1.5, -0.1)
-		b.add_child(head)
+		# REAL BIKES — two motorcycles with boy riders out of the dark
+		var moto = Models.inst("res://assets/vehicles/motorcycle.glb")
+		if moto != null:
+			Models.fit_height(moto, 1.4)
+			Models.align_long_axis_z(moto)
+			b.add_child(moto)
+		var br = Models.inst("res://assets/characters/boy.glb")
+		if br != null:
+			Models.fit_height(br, 1.25)
+			br.position = Vector3(0, 0.5, -0.1)
+			b.add_child(br)
+			if not Models.play_anim(br, ["sit_chair_idle", "sit", "drive", "ride"]):
+				Models.play_anim(br, ["idle"])
 		# headlight stabbing through the dark
 		var lamp = OmniLight3D.new()
 		lamp.light_color = Color(1, 0.95, 0.7); lamp.light_energy = 1.6; lamp.omni_range = 9
@@ -205,28 +210,34 @@ func _build_graveyard() -> void:
 	hand.material_override = _mat(Color(0.72, 0.6, 0.5), 0.9)
 	hand.position = Vector3(0, -0.7, 2.2)
 	grave.add_child(hand)
-	# six mourners, heads bowed
-	for i in 6:
-		var mo = Node3D.new()
+	# five mourners — real KayKit townsfolk, idle, heads bowed
+	for i in 5:
+		var mo = Models.inst(Models.KAYKIT[i % Models.KAYKIT.size()])
+		if mo == null:
+			continue
+		Models.fit_height(mo, 1.6)
 		mo.position = Vector3(-1.9 + (i % 3) * 1.9, 0, 3.4 + (i / 3) * 1.4)
-		grave.add_child(mo)
-		var c = MeshInstance3D.new()
-		c.mesh = CapsuleMesh.new(); c.mesh.radius = 0.2; c.mesh.height = 1.35
-		c.material_override = _mat(Color(0.08, 0.08, 0.1), 0.95)
-		c.position = Vector3(0, 0.68, 0)
-		mo.add_child(c)
-		var h = MeshInstance3D.new()
-		h.mesh = SphereMesh.new(); h.mesh.radius = 0.13; h.mesh.height = 0.26
-		h.material_override = _mat(Color(0.75, 0.62, 0.52), 0.9)
-		h.position = Vector3(0, 1.42, 0.06)
-		h.rotation_degrees.x = 25   # bowed
-		mo.add_child(h)
 		mo.rotation.y = PI          # facing the stone
+		mo.rotation.x = 0.16        # bowed
+		grave.add_child(mo)
+		Models.play_anim(mo, ["idle", "stand"])
 	# grave-side candle glow
 	var gl = OmniLight3D.new()
 	gl.light_color = Color(1, 0.7, 0.35); gl.light_energy = 1.4; gl.omni_range = 8
 	gl.position = Vector3(0.8, 0.4, 1.2)
 	grave.add_child(gl)
+
+func _build_horse() -> void:
+	# WHITE HORSE — walks in while she rises
+	horse = Node3D.new()
+	horse.position = Vector3(OX + 17, 0, 9)
+	horse.rotation.y = -PI * 0.75   # angled in from the east, toward the grave
+	horse.visible = false
+	add_child(horse)
+	var hm = Models.inst("res://assets/animals/horse.glb")
+	if hm != null:
+		Models.fit_height(hm, 1.9)
+		horse.add_child(hm)
 
 func _dirt_burst(at: Vector3) -> void:
 	# gore.chunks, recolored to fresh grave dirt
@@ -245,6 +256,7 @@ func _impact() -> void:
 	main.hud.caption("Two dirt bikes. No plates.")
 	main.hud.floater("THEY NEVER BRAKED", Color(0.9, 0.05, 0.05), 44)
 	main.hud.flash_red()
+	Models.play_anim(girl, ["die", "death", "fall", "hit"], false)
 	# she is flung off the board
 	var tw = create_tween()
 	tw.tween_property(girl, "position:y", 2.4, 0.4).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
@@ -255,6 +267,11 @@ func _impact() -> void:
 func _rise() -> void:
 	did_rise = true
 	main.hud.caption("But the grave would not keep her.")
+	# the white horse walks in out of the night
+	horse.visible = true
+	Models.play_anim(horse, ["walk", "idle"])
+	var htw = create_tween()
+	htw.tween_property(horse, "position", Vector3(OX + 12, 0, 5.5), 4.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	# a hand punches up through the fresh dirt
 	var hp = hand.global_position + Vector3(0, 1.0, 0)
 	var tw = create_tween()
@@ -268,6 +285,7 @@ func _rose() -> void:
 	girl.rotation = Vector3.ZERO
 	girl.position = grave.position + Vector3(0, -1.7, 2.2)
 	girl.visible = true
+	Models.play_anim(girl, ["idle", "stand"])
 	var tw = create_tween()
 	tw.tween_property(girl, "position:y", grave.position.y, 2.6).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 

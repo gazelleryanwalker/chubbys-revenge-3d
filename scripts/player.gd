@@ -4,6 +4,7 @@ extends CharacterBody3D
 
 const Gore = preload("res://scripts/gore.gd")
 const Outfits = preload("res://scripts/outfits.gd")
+const Models = preload("res://scripts/model_loader.gd")
 
 var main
 
@@ -12,6 +13,13 @@ const WEAPONS = {
 	"revolvers": {"n":"DUAL REVOLVERS", "rate":0.22, "dmg":1, "melee":false, "col":Color(0.72, 0.73, 0.80)},
 	"sawedoff":  {"n":"SAWED-OFF",      "rate":0.80, "dmg":3, "melee":false, "col":Color(0.45, 0.30, 0.15)},
 	"nailbat":   {"n":"NAIL BAT",       "rate":0.50, "dmg":2, "melee":true,  "col":Color(0.50, 0.36, 0.20)},
+}
+
+const GUN_MODELS = {
+	"shotgun":   {"path": "res://assets/weapons/shotgun.glb",  "len": 0.7},
+	"revolvers": {"path": "res://assets/weapons/revolver.glb", "len": 0.45},
+	"sawedoff":  {"path": "res://assets/weapons/sawedoff.glb", "len": 0.45},
+	"nailbat":   {"path": "res://assets/weapons/bat.glb",      "len": 0.5},
 }
 
 const CAMS = [
@@ -40,12 +48,14 @@ var transport := "board"
 var weapon := "shotgun"
 var weapon_t := 0.0
 var outfit_idx := 0
+var swing_t := 0.0
+var swing_dir := 0
 
 var cam: Camera3D
 var gun: Node3D
 var board: Node3D
 var horse_fp: Node3D
-var barrels: Array = []
+var gun_models: Dictionary = {}
 var stock: MeshInstance3D
 var hands: Array = []
 var chest: MeshInstance3D
@@ -91,23 +101,25 @@ func _build_gun() -> void:
 	gun = Node3D.new()
 	cam.add_child(gun)
 	gun.position = Vector3(0.42, -0.42, -0.8)
-	var steel = _mat(Color(0.25, 0.26, 0.3), 0.3, 0.9)
-	var wood = _mat(Color(0.35, 0.2, 0.1), 0.7)
-	for i in [-1, 1]:
-		var b = MeshInstance3D.new()
-		b.mesh = CylinderMesh.new()
-		b.mesh.top_radius = 0.028; b.mesh.bottom_radius = 0.028; b.mesh.height = 0.62
-		b.mesh.radial_segments = 12
-		b.material_override = steel
-		b.rotation_degrees.x = 90
-		b.position = Vector3(i * 0.035, 0, -0.1)
-		gun.add_child(b)
-		barrels.append(b)
+	# REAL WEAPON MODELS — one per WEAPONS entry, swapped by _recolor_gun
+	for id in GUN_MODELS:
+		var info: Dictionary = GUN_MODELS[id]
+		var m = Models.inst(info["path"])
+		if m == null:
+			continue
+		Models.fit_length(m, info["len"])
+		Models.align_long_axis_z(m)   # barrel along z (muzzle -z)
+		if id == "nailbat":
+			m.rotation.z = 0.6   # held angled
+			m.rotation.x = -0.35
+		m.visible = false
+		gun.add_child(m)
+		gun_models[id] = m
 	stock = MeshInstance3D.new()
 	stock.mesh = BoxMesh.new()
-	stock.mesh.size = Vector3(0.07, 0.12, 0.3)
-	stock.material_override = wood
-	stock.position = Vector3(0, -0.06, 0.22)
+	stock.mesh.size = Vector3(0.07, 0.12, 0.18)
+	stock.material_override = _mat(Color(0.35, 0.2, 0.1), 0.7)
+	stock.position = Vector3(0, -0.08, 0.18)
 	gun.add_child(stock)
 	# her hands on the grip — outfit accent recolors these
 	for i in [-1, 1]:
@@ -120,42 +132,18 @@ func _build_gun() -> void:
 		hands.append(h)
 
 func _build_horse() -> void:
-	# WHITE HORSE — first-person mount, moonlit gray (0x9fa4b5)
+	# WHITE HORSE — real rigged model, first-person mount (head/neck fills the view)
 	horse_fp = Node3D.new()
 	cam.add_child(horse_fp)
 	horse_fp.position = Vector3(0, -0.9, -0.9)
 	horse_fp.visible = false
-	var gray = _mat(Color(0.624, 0.643, 0.710), 0.8)
-	var dark = _mat(Color(0.30, 0.31, 0.38), 0.9)
-	var neck = MeshInstance3D.new()
-	neck.mesh = CapsuleMesh.new(); neck.mesh.radius = 0.16; neck.mesh.height = 0.85
-	neck.material_override = gray
-	neck.rotation_degrees.x = -35
-	neck.position = Vector3(0, -0.25, 0.28)
-	horse_fp.add_child(neck)
-	var head = MeshInstance3D.new()
-	head.mesh = BoxMesh.new(); head.mesh.size = Vector3(0.26, 0.3, 0.34)
-	head.material_override = gray
-	head.position = Vector3(0, 0.2, -0.1)
-	horse_fp.add_child(head)
-	var muzzle = MeshInstance3D.new()
-	muzzle.mesh = BoxMesh.new(); muzzle.mesh.size = Vector3(0.16, 0.16, 0.3)
-	muzzle.material_override = gray
-	muzzle.position = Vector3(0, 0.12, -0.4)
-	horse_fp.add_child(muzzle)
-	for i in [-1, 1]:
-		var ear = MeshInstance3D.new()
-		ear.mesh = BoxMesh.new(); ear.mesh.size = Vector3(0.06, 0.16, 0.05)
-		ear.material_override = dark
-		ear.position = Vector3(i * 0.09, 0.42, -0.06)
-		ear.rotation_degrees.z = i * -12
-		horse_fp.add_child(ear)
-	var mane = MeshInstance3D.new()
-	mane.mesh = BoxMesh.new(); mane.mesh.size = Vector3(0.08, 0.62, 0.14)
-	mane.material_override = dark
-	mane.rotation_degrees.x = -35
-	mane.position = Vector3(0, 0.02, 0.3)
-	horse_fp.add_child(mane)
+	var hm = Models.inst("res://assets/animals/horse.glb")
+	if hm != null:
+		Models.fit_height(hm, 1.9)
+		hm.rotation.y = PI   # head forward, body under her
+		hm.position = Vector3(0, -1.75, 1.1)
+		horse_fp.add_child(hm)
+		Models.play_anim(hm, ["gallop", "walk", "idle"])
 
 func _build_outfit() -> void:
 	# chest accent + wick tie + bride veil, all recolored/toggled by apply_outfit
@@ -184,22 +172,22 @@ func _build_outfit() -> void:
 	cam.add_child(veil)
 
 func _build_board() -> void:
-	# LED skateboard deck — her main ride (Uditer Pixel style: glowing deck)
+	# LED skateboard — real Kenney deck + her glowing LED strips
 	board = Node3D.new()
 	cam.add_child(board)
 	board.position = Vector3(0, -1.05, -1.1)
 	board.rotation_degrees.x = -8
-	var deck = MeshInstance3D.new()
-	var dm = BoxMesh.new(); dm.size = Vector3(0.5, 0.03, 1.5)
-	deck.mesh = dm
-	deck.material_override = _mat(Color(0.04, 0.04, 0.05), 0.35, 0.6)
-	board.add_child(deck)
+	var deck = Models.inst("res://assets/props/skateboard.glb")
+	if deck != null:
+		Models.fit_length(deck, 0.8)
+		Models.align_long_axis_z(deck)
+		board.add_child(deck)
 	for i in [-1, 1]:
 		var strip = MeshInstance3D.new()
-		var sm = BoxMesh.new(); sm.size = Vector3(0.03, 0.035, 1.46)
+		var sm = BoxMesh.new(); sm.size = Vector3(0.03, 0.035, 0.78)
 		strip.mesh = sm
 		strip.material_override = _mat(Color.BLACK, 0.3, 0.5, Color(1.0, 0.15, 0.8), 3.0)
-		strip.position = Vector3(i * 0.24, 0, 0)
+		strip.position = Vector3(i * 0.22, 0, 0)
 		board.add_child(strip)
 	var glow = OmniLight3D.new()
 	glow.light_color = Color(0.5, 0.3, 1.0)
@@ -251,9 +239,9 @@ func cycle_outfit() -> void:
 	main.hud.refresh()
 
 func _recolor_gun() -> void:
-	var c: Color = WEAPONS[weapon]["col"]
-	for b in barrels:
-		b.material_override = _mat(c, 0.3, 0.9)
+	# weapon switching = model swap (WEAPONS rates/melee logic unchanged)
+	for id in gun_models:
+		gun_models[id].visible = (id == weapon)
 
 func set_weapon(id: String) -> void:
 	weapon = id
@@ -289,10 +277,18 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("autolock"):
 		auto_lock = not auto_lock
 		main.hud.floater("AUTO-LOCK ON" if auto_lock else "AUTO-LOCK OFF", Color.GOLD, 16)
+	elif event.is_action_pressed("knock"):
+		main.try_knock()
 	elif event.is_action_pressed("dodge_left"):
-		lane_x = clampf(lane_x - 2.4, -4.6, 4.6)
+		if main.turn_offer != null:
+			main.take_turn(-1)
+		else:
+			lane_x = clampf(lane_x - 2.4, -4.6, 4.6)
 	elif event.is_action_pressed("dodge_right"):
-		lane_x = clampf(lane_x + 2.4, -4.6, 4.6)
+		if main.turn_offer != null:
+			main.take_turn(1)
+		else:
+			lane_x = clampf(lane_x + 2.4, -4.6, 4.6)
 
 func shoot() -> void:
 	muzzle_flash.light_energy = 6.0
@@ -315,6 +311,11 @@ func shoot() -> void:
 		var e = ray.get_collider().get_meta("enemy", null)
 		if e:
 			e.take_damage(w["dmg"], ray.get_collision_point())
+
+func turn_swing(dir: int) -> void:
+	# 0.8s camera yaw swing for side-street turns (offset eased out and back)
+	swing_t = 0.8
+	swing_dir = dir
 
 func do_jump() -> void:
 	if move_t > 0: return
@@ -410,4 +411,9 @@ func _physics_process(delta: float) -> void:
 	if shake > 0:
 		cam.position.x += randf_range(-1, 1) * shake * 0.02
 		cam.position.y += randf_range(-1, 1) * shake * 0.02
-	cam.rotation = Vector3(pitch + sin(gallop * 3.1) * 0.01, yaw, 0)
+	# side-street turn swing: temporary yaw offset, out and back over 0.8s
+	swing_t = maxf(0.0, swing_t - delta)
+	var swing_off := 0.0
+	if swing_t > 0.0:
+		swing_off = sin((1.0 - swing_t / 0.8) * PI) * 1.2 * float(swing_dir)
+	cam.rotation = Vector3(pitch + sin(gallop * 3.1) * 0.01, yaw + swing_off, 0)

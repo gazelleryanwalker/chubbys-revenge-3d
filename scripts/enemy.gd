@@ -1,8 +1,9 @@
 extends Node3D
-## WheeliePunk: dirt-bike rider doing a permanent wheelie. Approaches, taunts,
-## brawls on foot, rams. Dies in gore (head split via gore.gd).
+## WheeliePunk: real motorcycle + rigged KayKit rider doing a permanent wheelie.
+## Approaches, taunts, brawls on foot, rams. Dies in gore (head split via gore.gd).
 
 const Gore = preload("res://scripts/gore.gd")
+const Models = preload("res://scripts/model_loader.gd")
 
 var main
 var boss := false
@@ -13,8 +14,10 @@ var weave_amp := 1.5
 var base_x := 0.0
 var taunted := false
 var hitbox: Area3D
-var head: MeshInstance3D
+var head: Marker3D
 var rider: Node3D
+var bike: Node3D
+var stache: MeshInstance3D
 var alive := true
 
 func setup(p_boss: bool, wave: int) -> void:
@@ -32,52 +35,47 @@ func _mat(c: Color, rough := 0.5, metal := 0.0, emis := Color.BLACK, e := 0.0) -
 	return m
 
 func _build() -> void:
-	var body_mat = _mat(Color(0.35, 0.02, 0.02) if boss else Color(0.16, 0.16, 0.2), 0.45, 0.3)
-	var tire_mat = _mat(Color(0.05, 0.05, 0.06), 0.9)
-	var bike = Node3D.new()
+	# REAL BIKE — static motorcycle model fitted to ~1.4m, long axis along +z travel
+	bike = Node3D.new()
 	add_child(bike)
-	for z in [-0.5, 0.55]:
-		var w = MeshInstance3D.new()
-		var tm = TorusMesh.new(); tm.inner_radius = 0.185; tm.outer_radius = 0.26
-		w.mesh = tm; w.material_override = tire_mat
-		w.position = Vector3(0, 0.26, z)
-		bike.add_child(w)
-	var frame = MeshInstance3D.new()
-	frame.mesh = BoxMesh.new(); frame.mesh.size = Vector3(0.14, 0.18, 0.9)
-	frame.material_override = body_mat
-	frame.position = Vector3(0, 0.55, 0.02)
-	bike.add_child(frame)
+	var moto = Models.inst("res://assets/vehicles/motorcycle.glb")
+	if moto != null:
+		Models.fit_height(moto, 1.4)
+		Models.align_long_axis_z(moto)
+		bike.add_child(moto)
+		if boss:
+			Models.tint(moto, Color(0.9, 0.1, 0.08, 0.35))
 	# headlight
 	var lamp = OmniLight3D.new()
 	lamp.light_color = Color(1, 0.95, 0.7); lamp.light_energy = 1.2; lamp.omni_range = 8
 	lamp.position = Vector3(0, 0.8, 0.7)
 	bike.add_child(lamp)
-	# rider
+	# REAL RIDER — rigged KayKit punk seated on the bike (bosses always Barbarian)
 	rider = Node3D.new()
-	rider.position = Vector3(0, 0.35, -0.15)
-	add_child(rider)
-	var torso = MeshInstance3D.new()
-	torso.mesh = CapsuleMesh.new(); torso.mesh.radius = 0.17; torso.mesh.height = 0.6
-	torso.material_override = body_mat
-	torso.position = Vector3(0, 0.85, 0)
-	rider.add_child(torso)
-	head = MeshInstance3D.new()
-	head.mesh = SphereMesh.new(); head.mesh.radius = 0.14; head.mesh.height = 0.28
-	head.mesh.radial_segments = 16; head.mesh.rings = 8
-	head.material_override = body_mat
-	head.position = Vector3(0, 1.25, 0)
+	rider.position = Vector3(0, 0.5, -0.1)
+	bike.add_child(rider)
+	var head_y := 1.3
+	var cpath = Models.KAYKIT[0] if boss else Models.KAYKIT[randi() % Models.KAYKIT.size()]
+	var rm = Models.inst(cpath)
+	if rm != null:
+		Models.fit_height(rm, 1.35)
+		rider.add_child(rm)
+		if not Models.play_anim(rm, ["sit_chair_idle", "sit", "drive", "ride"]):
+			Models.play_anim(rm, ["idle"])   # fallback: positioned to read as riding
+		var ra = Models.combined_aabb(rm)
+		if ra.size.y > 0.01:
+			head_y = ra.position.y + ra.size.y - 0.08
+		if boss:
+			Models.tint(rm, Color(1.0, 0.12, 0.1, 0.45))
+	# head reference for head_split (~top of the rider model)
+	head = Marker3D.new()
+	head.position = Vector3(0, head_y, 0)
 	rider.add_child(head)
-	# red visor
-	var visor = MeshInstance3D.new()
-	visor.mesh = BoxMesh.new(); visor.mesh.size = Vector3(0.2, 0.06, 0.05)
-	visor.material_override = _mat(Color(0.05, 0.05, 0.1), 0.2, 0.7, Color(0.8, 0.1, 0.1), 1.6)
-	visor.position = Vector3(0, 1.26, 0.13)
-	rider.add_child(visor)
 	# mustache — every one of them
-	var stache = MeshInstance3D.new()
+	stache = MeshInstance3D.new()
 	stache.mesh = BoxMesh.new(); stache.mesh.size = Vector3(0.16, 0.03, 0.03)
 	stache.material_override = _mat(Color(0.09, 0.06, 0.04), 0.9)
-	stache.position = Vector3(0, 1.2, 0.13)
+	stache.position = Vector3(0, head_y - 0.06, 0.16)
 	rider.add_child(stache)
 	# rim light so the black rider reads at night
 	var rim = OmniLight3D.new()
@@ -109,6 +107,7 @@ func die() -> void:
 	alive = false
 	var head_pos = head.global_position
 	head.visible = false
+	rider.visible = false
 	Gore.blood_burst(get_parent(), head_pos, 90)
 	Gore.head_split(get_parent(), head_pos)
 	Gore.chunks(get_parent(), head_pos, 8)

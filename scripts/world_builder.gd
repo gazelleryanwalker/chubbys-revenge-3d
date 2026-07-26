@@ -1,6 +1,10 @@
 extends Node3D
 ## World: night street, three rotating zones (SUBURB / RURAL / DOWNTOWN),
 ## recycled roadside slots, lamps, moon, embers, volumetric fog, glow, SDFGI.
+## SUBURB slots use the 12 real Kenney house GLBs; side-street intersections
+## spawn ahead and scroll with the world.
+
+const Models = preload("res://scripts/model_loader.gd")
 
 const ZONES = [
 	{"n":"MAPLE STREET — THE SUBURBS", "fog":Color(0.05,0.04,0.08), "walk":Color(0.24,0.24,0.28)},
@@ -13,6 +17,7 @@ const NSEG := 12
 var zone_idx := 0
 var zone_t := 0.0
 var slots: Array = []
+var intersections: Array = []
 var world_speed := 11.0
 var walk_mats: Array = []
 
@@ -120,25 +125,42 @@ func _style_slot(g: Node3D, zone: int, s: int) -> void:
 		b.material_override = _mat(Color(0.1, 0.1, 0.14), 0.9, 0.1, Color(0.5, 0.5, 0.35), 0.35)
 		b.position = Vector3(s * (19 + rnd * 4), bh / 2.0, 0)
 		g.add_child(b)
-	elif zone == 0:  # SUBURB — houses, warm windows, trees, fences
-		var wall = _mat(Color(0.45, 0.4, 0.33) if rnd < 0.5 else Color(0.35, 0.4, 0.45), 0.9)
-		var h = MeshInstance3D.new()
-		var hm = BoxMesh.new(); hm.size = Vector3(7, 4.2, 7)
-		h.mesh = hm; h.material_override = wall
-		h.position = Vector3(s * (19 + rnd * 3), 2.1, 0)
-		g.add_child(h)
-		var roof = MeshInstance3D.new()
-		var rm = PrismMesh.new(); rm.size = Vector3(7.8, 2.4, 7.8)
-		roof.mesh = rm
-		roof.material_override = _mat(Color(0.23, 0.16, 0.15), 0.95)
-		roof.position = Vector3(h.position.x, 5.4, 0)
-		g.add_child(roof)
+	elif zone == 0:  # SUBURB — real houses, warm windows, trees, fences
+		var hx = s * (19 + rnd * 3)
+		g.set_meta("house_x", hx)   # remembered for door-knock residents
+		var house = Models.inst(Models.HOUSES[randi() % Models.HOUSES.size()])
+		if house != null:
+			Models.fit_height(house, 7.0)
+			house.position = Vector3(hx, 0, 0)
+			house.rotation.y = -PI / 2.0 if s > 0 else PI / 2.0   # front faces the road
+			g.add_child(house)
+		else:
+			var wall = _mat(Color(0.45, 0.4, 0.33) if rnd < 0.5 else Color(0.35, 0.4, 0.45), 0.9)
+			var h = MeshInstance3D.new()
+			var hm = BoxMesh.new(); hm.size = Vector3(7, 4.2, 7)
+			h.mesh = hm; h.material_override = wall
+			h.position = Vector3(hx, 2.1, 0)
+			g.add_child(h)
+		# warm window glow facing the road
 		var win = MeshInstance3D.new()
-		var wm2 = BoxMesh.new(); wm2.size = Vector3(0.9, 0.9, 0.1)
+		var wm2 = BoxMesh.new(); wm2.size = Vector3(0.1, 1.0, 1.0)
 		win.mesh = wm2
 		win.material_override = _mat(Color.BLACK, 0.5, 0, Color(1, 0.75, 0.4), 1.6)
-		win.position = Vector3(h.position.x, 2.2, 3.56 if s < 0 else -3.56)
+		win.position = Vector3(hx - s * 4.4, 2.2, 0)
 		g.add_child(win)
+		# procedural picket fence along the sidewalk
+		var fmat = _mat(Color(0.78, 0.76, 0.7), 0.9)
+		var rail = MeshInstance3D.new()
+		var rm3 = BoxMesh.new(); rm3.size = Vector3(0.06, 0.07, 7.0)
+		rail.mesh = rm3; rail.material_override = fmat
+		rail.position = Vector3(s * 14.2, 0.55, 0)
+		g.add_child(rail)
+		for fi in 5:
+			var post = MeshInstance3D.new()
+			var pm3 = BoxMesh.new(); pm3.size = Vector3(0.09, 0.85, 0.09)
+			post.mesh = pm3; post.material_override = fmat
+			post.position = Vector3(s * 14.2, 0.42, -2.8 + fi * 1.4)
+			g.add_child(post)
 		if rnd < 0.7:
 			_add_tree(g, s * 13.5, 2 + rnd * 4, 1.0)
 	else:  # RURAL — barns, silos, corn, big trees, gaps
@@ -182,6 +204,40 @@ func _add_tree(g: Node3D, x: float, z: float, sc: float) -> void:
 	leaf.scale = Vector3.ONE * sc
 	g.add_child(leaf)
 
+func spawn_intersection(street_name: String) -> Node3D:
+	# SIDE STREET — cross-road + green street sign, scrolls with the world
+	var g = Node3D.new()
+	g.position = Vector3(0, 0, -130)
+	add_child(g)
+	var cr = MeshInstance3D.new()
+	var pm = PlaneMesh.new(); pm.size = Vector2(140, 10)
+	cr.mesh = pm
+	cr.material_override = _mat(Color(0.09, 0.09, 0.11), 0.6, 0.15)
+	cr.position = Vector3(0, 0.015, 0)
+	g.add_child(cr)
+	# green street sign on a box pole at the corner
+	var pole = MeshInstance3D.new()
+	var bm = BoxMesh.new(); bm.size = Vector3(0.09, 3.0, 0.09)
+	pole.mesh = bm
+	pole.material_override = _mat(Color(0.15, 0.16, 0.18), 0.5, 0.7)
+	pole.position = Vector3(11.0, 1.5, 0)
+	g.add_child(pole)
+	var sign = MeshInstance3D.new()
+	var sb = BoxMesh.new(); sb.size = Vector3(2.2, 0.6, 0.06)
+	sign.mesh = sb
+	sign.material_override = _mat(Color(0.02, 0.25, 0.1), 0.6, 0.1, Color(0.02, 0.4, 0.15), 0.6)
+	sign.position = Vector3(11.0, 2.9, 0)
+	g.add_child(sign)
+	var lab = Label3D.new()
+	lab.text = street_name
+	lab.font_size = 64
+	lab.modulate = Color(1, 1, 1)
+	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lab.position = Vector3(11.0, 2.95, 0.1)
+	g.add_child(lab)
+	intersections.append(g)
+	return g
+
 func apply_zone(z: int) -> void:
 	zone_idx = z
 	for g in slots:
@@ -201,6 +257,12 @@ func _process(delta: float) -> void:
 		g.position.z += world_speed * wdt
 		if g.position.z > 40:
 			g.position.z -= NSEG * SEG
+	for i in range(intersections.size() - 1, -1, -1):
+		var g2 = intersections[i]
+		g2.position.z += world_speed * wdt
+		if g2.position.z > 40:
+			intersections.remove_at(i)
+			g2.queue_free()
 	zone_t += wdt
 	if zone_t > 35:
 		zone_t = 0

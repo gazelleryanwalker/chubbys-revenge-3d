@@ -9,6 +9,8 @@ var kills_label: Label
 var weapon_label: Label
 var outfit_label: Label
 var caption_label: Label
+var hint_label: Label
+var credits_label: Label
 var flash_rect: ColorRect
 var fade_rect: ColorRect
 var crosshair: Label
@@ -73,6 +75,26 @@ func _ready() -> void:
 	caption_label.add_theme_font_size_override("font_size", 24)
 	caption_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.95))
 	add_child(caption_label)
+	# persistent bottom-center hint (door knocks, side-street offers)
+	hint_label = Label.new()
+	hint_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	hint_label.position = Vector2(-400, -130)
+	hint_label.custom_minimum_size = Vector2(800, 30)
+	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint_label.add_theme_font_size_override("font_size", 16)
+	hint_label.add_theme_color_override("font_color", Color(0.75, 0.95, 0.75))
+	hint_label.visible = false
+	add_child(hint_label)
+	# asset attribution, always on
+	credits_label = Label.new()
+	credits_label.text = "Assets: Kenney/KayKit/Quaternius (CC0), Corentin Fatus (CC-BY)"
+	credits_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	credits_label.position = Vector2(-420, -20)
+	credits_label.custom_minimum_size = Vector2(400, 16)
+	credits_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	credits_label.add_theme_font_size_override("font_size", 10)
+	credits_label.modulate.a = 0.5
+	add_child(credits_label)
 	# floaters center
 	floaters = VBoxContainer.new()
 	floaters.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -131,6 +153,13 @@ func floater(text: String, color := Color.WHITE, size := 22) -> void:
 func caption(text: String) -> void:
 	caption_label.text = text
 
+func hint(text: String) -> void:
+	hint_label.text = text
+	hint_label.visible = true
+
+func clear_hint() -> void:
+	hint_label.visible = false
+
 func flash_red() -> void:
 	flash_rect.modulate.a = 0.7
 	var tw = create_tween()
@@ -156,6 +185,7 @@ func show_game() -> void:
 	dead_panel.visible = false
 	pause_panel.visible = false
 	caption("")
+	clear_hint()
 	refresh()
 
 func show_pause() -> void:
@@ -167,6 +197,7 @@ func hide_pause() -> void:
 func show_dead(kills: int, wave: int) -> void:
 	dead_panel.get_node("DeadText").text = "SHE'S DOWN\n\n%d punks down, wave %d\n\nR — RIDE AGAIN" % [kills, wave]
 	dead_panel.visible = true
+	clear_hint()
 
 func _process(_delta: float) -> void:
 	if main.state == main.S.RIDE:
