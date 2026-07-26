@@ -1,0 +1,26 @@
+; Godot 4.3 project — CHUBBY'S REVENGE 3D
+; Built procedurally: almost everything is constructed in code for robustness.
+
+config_version=5
+
+[application]
+
+config/name="Chubby's Revenge"
+config/description="She rose. Now they pay. A revenge FPS for Brooke."
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.3", "Forward Plus")
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+
+[rendering]
+
+renderer/rendering_method="forward_plus"
+environment/defaults/default_clear_color=Color(0.02, 0.02, 0.05, 1)
+
+[debug]
+
+; --test flag runs a scripted smoke scenario and quits (see main.gd)
