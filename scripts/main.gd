@@ -36,14 +36,19 @@ var wave_killed := 0
 var spawn_timer := 0.0
 var zone_idx := 0
 var lifetime_kills := 0
+var rider_name := "BROOKE"   # player identity — shown on the HUD + menu, persisted in save.cfg
+var runs_played := 0         # total runs booted (first 3 get instruction cards)
+var tp_default := false      # menu toggle: start runs in third person
 var outfit := 0
 var drops: Array = []
 var knock_cd := 0.0
 var touch_mode := false      # true on touchscreens (iPhone Safari web export) — HUD builds touch UI
 var joy_vec := Vector2.ZERO  # virtual joystick output (-1..1), x = lane dodge target
-var turn_offer = null        # null or {"name": String, "t": float}
+var turn_offer = null        # null or {"name": String, "t": float} — armed when the intersection is ~3s out
+var pending_turn = null      # null or {"name": String, "node": Node3D} — intersection en route, not yet in range
 var next_turn_in := randf_range(22.0, 40.0)
 var _hint_mode := ""
+var _suburb_hint_shown := false  # one-time knock hint per run (first visit to the suburb zone)
 
 var world
 var player
@@ -56,9 +61,15 @@ var _test_t := 0.0
 var _test_phase := 0
 var _introtest := false
 var _introtest_t := 0.0
+var _looktest := false
+var _looktest_t := 0.0
+var _looktest_phase := 0
 
 
 func _ready() -> void:
+	# PAUSE FIX: while get_tree().paused, only PROCESS_MODE_ALWAYS nodes get input —
+	# main must stay live or P/ESC/R can never unpause (soft-lock)
+	process_mode = PROCESS_MODE_ALWAYS
 	_setup_input()
 	# touch controls: real touchscreens, incl. the Web export on iPhone Safari
 	touch_mode = DisplayServer.is_touchscreen_available() or (OS.has_feature("web") and DisplayServer.is_touchscreen_available())
@@ -88,16 +99,46 @@ func _ready() -> void:
 		_test = true
 		print("TEST_MODE: boot ok, starting run")
 		start_run()
+	elif "--looktest" in args:
+		# like --smoke, but verifies mouse-look: injects motion, reads yaw/pitch
+		_looktest = true
+		print("LOOKTEST: boot ok, starting run")
+		start_run()
+	elif "--introtest" in args:
+		_introtest = true
+		_start_intro()
 	else:
-		# intro cinematic first; it calls start_run() itself at the end
-		state = S.INTRO
-		intro = Node3D.new()
-		intro.set_script(IntroScript)
-		intro.name = "Intro"
-		intro.main = self
-		add_child(intro)
-		if "--introtest" in args:
-			_introtest = true
+		# START MENU — name, controls, toggles; RIDE plays the intro, then the run
+		state = S.MENU
+		hud.show_menu()
+
+func _start_intro() -> void:
+	# intro cinematic; it calls start_run() itself at the end
+	state = S.INTRO
+	intro = Node3D.new()
+	intro.set_script(IntroScript)
+	intro.name = "Intro"
+	intro.main = self
+	add_child(intro)
+	hud.show_intro()   # hide gameplay chrome over the cinematic + skip prompt
+
+func menu_done() -> void:
+	# RIDE pressed on the start menu — save the rider name, play the intro
+	if state != S.MENU:
+		return
+	hud.hide_menu()
+	save_game()
+	_start_intro()
+
+func toggle_god_mode() -> void:
+	god_mode = not god_mode
+	save_game()
+	hud.sync_menu()
+
+func toggle_tp_default() -> void:
+	tp_default = not tp_default
+	save_game()   # persist the default next to lifetime_kills/outfit
+	hud.sync_menu()
 
 func _setup_input() -> void:
 	var binds := {
@@ -106,6 +147,11 @@ func _setup_input() -> void:
 		"foot": [KEY_V], "knock": [KEY_E], "autolock": [KEY_X], "nvg": [KEY_N],
 		"outfit": [KEY_O], "tpview": [KEY_T],
 		"dodge_left": [KEY_A], "dodge_right": [KEY_D],
+		# dedicated side-street turn keys: Q left / E right (E = knock when no offer is up)
+		"turn_left": [KEY_Q],
+		# arrow-key aim fallback (trackpads / no mouse): handled in player physics
+		"aim_left": [KEY_LEFT], "aim_right": [KEY_RIGHT],
+		"aim_up": [KEY_UP], "aim_down": [KEY_DOWN],
 	}
 	for action in binds:
 		if not InputMap.has_action(action):
@@ -131,16 +177,22 @@ func start_run() -> void:
 	Engine.time_scale = 1.0   # safety: killcam slow-mo never survives a restart
 	joy_vec = Vector2.ZERO
 	turn_offer = null
+	pending_turn = null
 	next_turn_in = randf_range(22.0, 40.0)
 	_hint_mode = ""
+	_suburb_hint_shown = false
 	for g in world.slots:
 		if g.has_meta("knocked"):
 			g.remove_meta("knocked")
 	world.apply_zone(0)
 	state = S.RIDE
 	player.on_run_start()
+	hud.hide_menu()
 	hud.show_game()
+	runs_played += 1
+	save_game()
 	hud.floater("GOD MODE — SHE CANNOT DIE" if god_mode else "SHE RIDES", Color.GOLD)
+	hud.run_instructions(runs_played)
 	print("RUN_STARTED")
 
 func start_wave() -> void:
@@ -153,6 +205,11 @@ func start_wave() -> void:
 	var label = "LEVEL %d/10 — %s" % [wave, LEVELS[wave-1]] if wave <= 10 else "ENDLESS — WAVE %d" % wave
 	hud.floater(label, Color(0.85, 0.9, 1.0), 26)
 	print("WAVE_STARTED:", label)
+	# boss_spawn: one boss on waves 5 and 10, then every 5th endless wave
+	if wave == 5 or wave == 10 or (wave > 10 and wave % 5 == 0):
+		spawn_enemy(true)
+		hud.floater("⚠ KILLER RIDES THIS LEVEL ⚠", Color(1.0, 0.15, 0.1), 26)
+		print("BOSS_SPAWN: wave ", wave)
 
 func spawn_enemy(boss := false) -> void:
 	var e = Node3D.new()
@@ -171,7 +228,8 @@ func on_enemy_killed(e) -> void:
 	lifetime_kills += 1
 	for o in Outfits.OUTFITS:
 		if int(o["kills"]) == lifetime_kills:
-			hud.floater("NEW OUTFIT: " + o["n"], Color.GOLD, 26)
+			hud.floater("NEW OUTFIT: " + o["n"] + " — PRESS O TO WEAR", Color.GOLD, 26)
+			music.sfx("unlock")
 	save_game()
 	if randf() < 0.12:
 		spawn_drop(e.position)
@@ -210,6 +268,8 @@ func killcam(boss_pos: Vector3) -> void:
 		func(): Engine.time_scale = 1.0)
 
 func _set_hint(mode: String, text := "") -> void:
+	if mode == _hint_mode:
+		return   # don't churn the label every frame (keeps "CLICK TO AIM" stable)
 	_hint_mode = mode
 	if mode == "":
 		hud.clear_hint()
@@ -238,6 +298,7 @@ func try_knock() -> void:
 	g.set_meta("knocked", true)
 	knock_cd = 12.0
 	_set_hint("")
+	music.sfx("knock")
 	_spawn_resident(g)
 	# staggered dialogue, then the reward
 	var line = RESIDENTS[randi() % RESIDENTS.size()]
@@ -247,15 +308,17 @@ func try_knock() -> void:
 	get_tree().create_timer(1.8).timeout.connect(func(): _knock_reward(rw))
 
 func _knock_reward(rw: int) -> void:
+	# rewards reference REAL stats only (city love / health) — no fake intel/stars
 	match rw:
 		0:
-			hud.floater("+1 INTEL", Color(0.6, 0.9, 1.0), 22)
+			city_love = min(100.0, city_love + 10)
+			hud.floater("+10 CITY LOVE", Color(1.0, 0.85, 0.4), 22)
 		1:
 			city_love = min(100.0, city_love + 20)
 			hud.floater("+20 CITY LOVE", Color(1.0, 0.85, 0.4), 22)
 		_:
-			city_love = min(100.0, city_love + 10)   # "+2 STARS" folded into city love
-			hud.floater("+2 STARS", Color.GOLD, 22)
+			health = minf(100.0, health + 15.0)
+			hud.floater("+15 HEALTH", Color(0.5, 1.0, 0.5), 22)
 	hud.refresh()
 
 func _spawn_resident(g: Node3D) -> void:
@@ -287,16 +350,22 @@ func take_turn(dir: int) -> void:
 func save_game() -> void:
 	var cfg = ConfigFile.new()
 	cfg.set_value("meta", "lifetime_kills", lifetime_kills)
+	cfg.set_value("meta", "rider_name", rider_name)
+	cfg.set_value("meta", "runs_played", runs_played)
 	cfg.set_value("meta", "outfit", outfit)
 	cfg.set_value("meta", "god_mode", god_mode)
+	cfg.set_value("meta", "tp_default", tp_default)
 	cfg.save("user://save.cfg")
 
 func load_game() -> void:
 	var cfg = ConfigFile.new()
 	if cfg.load("user://save.cfg") == OK:
 		lifetime_kills = int(cfg.get_value("meta", "lifetime_kills", 0))
+		rider_name = str(cfg.get_value("meta", "rider_name", "BROOKE"))
+		runs_played = int(cfg.get_value("meta", "runs_played", 0))
 		outfit = int(cfg.get_value("meta", "outfit", 0))
 		god_mode = bool(cfg.get_value("meta", "god_mode", true))
+		tp_default = bool(cfg.get_value("meta", "tp_default", false))
 	outfit = clampi(outfit, 0, Outfits.OUTFITS.size() - 1)
 	if int(Outfits.OUTFITS[outfit]["kills"]) > lifetime_kills:
 		outfit = 0   # saved outfit not actually unlocked
@@ -306,6 +375,10 @@ func _notification(what: int) -> void:
 		save_game()
 
 func on_player_rammed(dmg: float) -> void:
+	# RAM FEEDBACK — red flash + heavy camera shake + thud on every hit
+	hud.flash_red()
+	player.shake = maxf(player.shake, 14.0)
+	music.sfx("ram")
 	if god_mode:
 		hud.floater("UNBREAKABLE", Color.GOLD, 18)
 	else:
@@ -319,21 +392,50 @@ func toggle_pause() -> void:
 	if state == S.RIDE:
 		state = S.PAUSED
 		get_tree().paused = true
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE   # release aim lock while paused
 		hud.show_pause()
 	elif state == S.PAUSED:
 		state = S.RIDE
 		get_tree().paused = false
+		if not touch_mode:
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		hud.hide_pause()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_P or event.physical_keycode == KEY_ESCAPE:
 			toggle_pause()
-		elif event.physical_keycode == KEY_R and state == S.DEAD:
+		elif event.physical_keycode == KEY_R and (state == S.DEAD or state == S.PAUSED):
+			# R — RESTART works from the death screen AND the pause menu
 			get_tree().paused = false
+			hud.hide_pause()
 			start_run()
+		elif event.physical_keycode == KEY_M and state == S.DEAD:
+			# M — MENU: escape the death dead-end; per-run vars reset on next start_run
+			state = S.MENU
+			hud.show_menu()
 
 func _process(delta: float) -> void:
+	if _looktest:
+		_looktest_t += delta
+		if _looktest_phase == 0 and _looktest_t > 0.3:
+			# inject two right-and-up mouse motions, as if the player dragged the mouse
+			for i in 2:
+				var ev = InputEventMouseMotion.new()
+				ev.relative = Vector2(200, -50)
+				Input.parse_input_event(ev)
+			_looktest_phase = 1
+		elif _looktest_phase == 1 and _looktest_t > 0.8:
+			# code subtracts relative*dSens: mouse right -> yaw drops; up -> pitch rises
+			var y = player.yaw
+			var p = player.pitch
+			if y < -0.15 and p > 0.05:
+				print("LOOK_OK: yaw=%.3f pitch=%.3f" % [y, p])
+				get_tree().quit(0)
+			else:
+				print("LOOK_FAIL: yaw=%.3f pitch=%.3f" % [y, p])
+				get_tree().quit(1)
+		return
 	if _introtest:
 		_introtest_t += delta
 		if _introtest_t > 1.5 and state == S.INTRO and is_instance_valid(intro):
@@ -348,6 +450,14 @@ func _process(delta: float) -> void:
 		return
 	if state != S.RIDE:
 		return
+	# ZONE SYNC — world owns the zone (auto-rotates, take_turn randomizes it);
+	# main.zone_idx is a mirror, refreshed every frame for knock gating + HUD
+	zone_idx = world.zone_idx
+	# one-time knock discovery hint, first suburb visit of the run
+	if not _suburb_hint_shown and world.zone_idx == 0:
+		_suburb_hint_shown = true
+		hud.floater("DISMOUNT TO KNOCK ON DOORS" if touch_mode else "V — DISMOUNT TO KNOCK ON DOORS",
+			Color(0.75, 0.95, 0.75), 18, 3.0)
 	if between_waves:
 		wave_break -= delta
 		if wave_break <= 0:
@@ -363,6 +473,7 @@ func _process(delta: float) -> void:
 			between_waves = true
 			wave_break = 3.5
 			hud.floater("WAVE CLEARED", Color(0.4, 1, 0.4), 24)
+			music.sfx("waveclear")
 	# weapon pickups drift toward her; collected as they reach the bike
 	for i in range(drops.size() - 1, -1, -1):
 		var d = drops[i]
@@ -373,27 +484,35 @@ func _process(delta: float) -> void:
 			player.set_weapon(d.get_meta("weapon"))
 			d.queue_free()
 			drops.remove_at(i)
-	# door knocks: suburb + on foot + slot in reach
+	# door knocks: suburb + on foot + slot in reach (touch-aware hint)
 	knock_cd = maxf(0.0, knock_cd - delta)
 	if turn_offer == null:
 		if _knock_target() != null:
-			_set_hint("knock", "E — KNOCK ON THE DOOR")
+			_set_hint("knock", "KNOCK BUTTON — KNOCK ON THE DOOR" if touch_mode else "E — KNOCK ON THE DOOR")
 		else:
 			_set_hint("")
-	# side streets: intersection offer every 22-40s
+	# side streets: intersection spawns on a 22-40s timer ~12s out; the TURN OFFER
+	# arms from the intersection's own position (z > -45, ~3s out) so keys match visuals
 	if turn_offer != null:
 		turn_offer["t"] -= delta
 		if turn_offer["t"] <= 0.0:
 			turn_offer = null
 			_set_hint("")
 			next_turn_in = randf_range(22.0, 40.0)
+	elif pending_turn != null:
+		if not is_instance_valid(pending_turn["node"]):
+			pending_turn = null
+			next_turn_in = randf_range(22.0, 40.0)
+		elif pending_turn["node"].position.z > -45.0:
+			turn_offer = {"name": pending_turn["name"], "t": 4.0}
+			pending_turn = null
+			_set_hint("turn", "◀ FLICK JOYSTICK TO TURN ▶" if touch_mode else "◀ Q TURN LEFT · E TURN RIGHT ▶")
 	else:
 		next_turn_in -= delta
 		if next_turn_in <= 0.0:
 			var nm = TURN_NAMES[randi() % TURN_NAMES.size()]
-			world.spawn_intersection(nm)
-			turn_offer = {"name": nm, "t": 4.0}
-			_set_hint("turn", "◀ A TURN LEFT · D TURN RIGHT ▶")
+			var g = world.spawn_intersection(nm)
+			pending_turn = {"name": nm, "node": g}
 	if _test:
 		_run_test(delta)
 

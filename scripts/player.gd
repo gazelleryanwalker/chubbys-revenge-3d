@@ -51,6 +51,7 @@ var outfit_idx := 0
 var swing_t := 0.0
 var swing_dir := 0
 var view_mode := "fp"        # "fp" first-person rigs / "tp" third-person orbit behind Brooke
+var _aim_lock_shown := false # "AIM LOCKED" floater fires once per run
 var killcam_t := 0.0         # >0 while the boss kill-cam owns the camera
 var killcam_pos := Vector3.ZERO
 var killcam_orbit := 0.0
@@ -91,7 +92,9 @@ func _ready() -> void:
 	_build_horse()
 	_build_outfit()
 	_build_girl_tp()
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	# cursor stays free until gameplay starts (menu/intro need it; Web pointer
+	# lock only engages after a user click — on_run_start + click-to-lock below)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _mat(color: Color, rough := 0.5, metal := 0.0, emis := Color.BLACK, e := 0.0) -> StandardMaterial3D:
 	var m = StandardMaterial3D.new()
@@ -232,8 +235,11 @@ func on_run_start() -> void:
 	transport = "board"
 	weapon = "shotgun"
 	weapon_t = 0.0
-	view_mode = "fp"     # every run starts in first person, Brooke body hidden
+	view_mode = "tp" if main.tp_default else "fp"   # menu toggle picks the default camera
+	_aim_lock_shown = false
 	killcam_t = 0.0
+	if not main.touch_mode:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED   # pointer lock only once gameplay starts
 	_recolor_gun()
 	_update_view_vis()
 	apply_outfit(main.outfit)
@@ -284,7 +290,14 @@ func apply_outfit(idx: int) -> void:
 
 func cycle_outfit() -> void:
 	var list = Outfits.unlocked_list(main.lifetime_kills)
-	if list.is_empty():
+	if list.size() <= 1:
+		# nothing to cycle into — tell her exactly when the next one unlocks
+		var next_k := 25
+		for o in Outfits.OUTFITS:
+			if int(o["kills"]) > main.lifetime_kills:
+				next_k = int(o["kills"])
+				break
+		main.hud.floater("LOCKED — NEXT AT %d PUNKS" % next_k, Color(1, 0.5, 0.4), 18)
 		return
 	var pos = (list.find(outfit_idx) + 1) % list.size()
 	var idx: int = list[pos]
@@ -303,6 +316,7 @@ func set_weapon(id: String) -> void:
 	weapon = id
 	weapon_t = 25.0
 	_recolor_gun()
+	main.music.sfx("pickup")
 	main.hud.floater(WEAPONS[id]["n"] + " PICKED UP", Color(1, 0.8, 0.3), 24)
 	main.hud.refresh()
 
@@ -318,12 +332,20 @@ func toggle_autolock() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if main.state != main.S.RIDE:
 		return
+	if not main.touch_mode and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED \
+			and event is InputEventMouseButton and event.pressed:
+		# Web/desktop: pointer lock needs a user click — grab it, confirm once
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		if not _aim_lock_shown:
+			_aim_lock_shown = true
+			main.hud.floater("AIM LOCKED", Color(0.6, 1.0, 0.6), 16)
+		return   # consume the locking click — it must NOT also fire the gun
 	if event is InputEventMouseMotion:
-		yaw = clampf(yaw - event.relative.x * 0.0026, -1.15, 1.15)
+		yaw = clampf(yaw - event.relative.x * 0.0026, -1.35, 1.35)
 		pitch = clampf(pitch - event.relative.y * 0.0022, -0.45, 0.5)
 	if event is InputEventScreenDrag:
 		# touch drag-to-look (screen area outside the joystick/buttons)
-		yaw = clampf(yaw - event.relative.x * 0.004, -1.15, 1.15)
+		yaw = clampf(yaw - event.relative.x * 0.004, -1.35, 1.35)
 		pitch = clampf(pitch - event.relative.y * 0.0035, -0.45, 0.5)
 	if event.is_action_pressed("shoot") and not on_foot:
 		shoot()
@@ -345,20 +367,24 @@ func _unhandled_input(event: InputEvent) -> void:
 		toggle_view()
 	elif event.is_action_pressed("autolock"):
 		toggle_autolock()
-	elif event.is_action_pressed("knock"):
-		main.try_knock()
-	elif event.is_action_pressed("dodge_left"):
+	elif event.is_action_pressed("turn_left"):
+		# Q — dedicated TURN LEFT while a side-street offer is up
 		if main.turn_offer != null:
 			main.take_turn(-1)
-		else:
-			lane_x = clampf(lane_x - 2.4, -4.6, 4.6)
-	elif event.is_action_pressed("dodge_right"):
+	elif event.is_action_pressed("knock"):
+		# E — TURN RIGHT while an offer is up; door knock otherwise
 		if main.turn_offer != null:
 			main.take_turn(1)
 		else:
-			lane_x = clampf(lane_x + 2.4, -4.6, 4.6)
+			main.try_knock()
+	elif event.is_action_pressed("dodge_left"):
+		# A/D are ALWAYS dodge — turns moved to Q/E (touch: joystick flick)
+		lane_x = clampf(lane_x - 2.4, -4.6, 4.6)
+	elif event.is_action_pressed("dodge_right"):
+		lane_x = clampf(lane_x + 2.4, -4.6, 4.6)
 
 func shoot() -> void:
+	main.music.sfx("shoot")
 	muzzle_flash.light_energy = 6.0
 	shake = max(shake, 5)
 	var w = WEAPONS[weapon]
@@ -422,6 +448,22 @@ func brawl_strike() -> void:
 func _physics_process(delta: float) -> void:
 	if main.state != main.S.RIDE:
 		return
+	# "CLICK TO AIM" nudge while the pointer is free (Web pointer lock needs a click)
+	if not main.touch_mode:
+		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+			main.hud.show_aim_hint()
+		else:
+			main.hud.hide_aim_hint()
+	# arrow-key aim fallback (trackpads) — same clamps/sign as mouse look
+	var look_step := 1.6 * delta
+	if Input.is_action_pressed("aim_left"):
+		yaw = clampf(yaw + look_step, -1.35, 1.35)
+	if Input.is_action_pressed("aim_right"):
+		yaw = clampf(yaw - look_step, -1.35, 1.35)
+	if Input.is_action_pressed("aim_up"):
+		pitch = clampf(pitch + look_step, -0.45, 0.5)
+	if Input.is_action_pressed("aim_down"):
+		pitch = clampf(pitch - look_step, -0.45, 0.5)
 	if killcam_t > 0.0:
 		# BOSS KILL-CAM — orbit the death spot at 3m; decays in real time
 		var real_dt = delta / maxf(Engine.time_scale, 0.01)
@@ -467,7 +509,7 @@ func _physics_process(delta: float) -> void:
 		if tgt:
 			var tp = tgt.global_position + Vector3(0, 1.2, 0)
 			var d = tp - cam.global_position
-			var want_yaw = clampf(atan2(-d.x, -d.z), -1.15, 1.15)
+			var want_yaw = clampf(atan2(-d.x, -d.z), -1.35, 1.35)
 			var want_pitch = clampf(atan2(d.y, Vector2(d.x, d.z).length()), -0.45, 0.5)
 			yaw += (want_yaw - yaw) * min(1.0, delta * 7)
 			pitch += (want_pitch - pitch) * min(1.0, delta * 7)
@@ -504,7 +546,18 @@ func _physics_process(delta: float) -> void:
 		if shake > 0:
 			cam.position.x += randf_range(-1, 1) * shake * 0.02
 			cam.position.y += randf_range(-1, 1) * shake * 0.02
-		cam.look_at(global_position + Vector3(lane_cur, 1.5, 0), Vector3.UP)
+		# TP AIM FIX — with auto-lock the cam (and its RayCast3D child) must point at
+		# the locked target, not through Brooke's back; otherwise aim at her head
+		var look_p = global_position + Vector3(lane_cur, 1.5, 0)
+		if auto_lock:
+			var tgt = null
+			var tz := -999.0
+			for e in main.enemies:
+				if e.position.z < -2 and e.position.z > tz:
+					tz = e.position.z; tgt = e
+			if tgt:
+				look_p = tgt.global_position + Vector3(0, 1.2, 0)
+		cam.look_at(look_p, Vector3.UP)
 	else:
 		cam.position = Vector3(lane_cur + co["x"], cy, 0)
 		if shake > 0:

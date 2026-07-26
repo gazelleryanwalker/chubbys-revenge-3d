@@ -68,6 +68,7 @@ var touch_layer: Control = null
 var pause_btn: Button = null
 var joy = null
 
+var hp_bg: ColorRect
 var hp_bar: ColorRect
 var level_label: Label
 var kills_label: Label
@@ -82,6 +83,15 @@ var crosshair: Label
 var floaters: VBoxContainer
 var pause_panel: Control
 var dead_panel: Control
+var menu_panel: Control
+var legend_label: Label
+var name_edit: LineEdit
+var lifetime_label: Label
+var god_btn: Button
+var tp_btn: Button
+var skip_label: Label
+var _aim_hint_on := false
+var _chrome: Array = []   # gameplay chrome hidden during S.INTRO
 
 func _ready() -> void:
 	# crosshair
@@ -92,7 +102,7 @@ func _ready() -> void:
 	crosshair.set_anchors_preset(Control.PRESET_CENTER)
 	add_child(crosshair)
 	# health bar
-	var hp_bg = ColorRect.new()
+	hp_bg = ColorRect.new()
 	hp_bg.color = Color(0, 0, 0, 0.5)
 	hp_bg.position = Vector2(20, 20)
 	hp_bg.size = Vector2(220, 18)
@@ -150,6 +160,16 @@ func _ready() -> void:
 	hint_label.add_theme_color_override("font_color", Color(0.75, 0.95, 0.75))
 	hint_label.visible = false
 	add_child(hint_label)
+	# dim skip prompt, bottom-center, shown only during the intro cinematic
+	skip_label = Label.new()
+	skip_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	skip_label.position = Vector2(-200, -34)
+	skip_label.custom_minimum_size = Vector2(400, 20)
+	skip_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	skip_label.add_theme_font_size_override("font_size", 14)
+	skip_label.modulate.a = 0.5
+	skip_label.visible = false
+	add_child(skip_label)
 	# asset attribution, always on
 	credits_label = Label.new()
 	credits_label.text = "Assets: Kenney/KayKit/Quaternius (CC0), Corentin Fatus (CC-BY)"
@@ -160,6 +180,16 @@ func _ready() -> void:
 	credits_label.add_theme_font_size_override("font_size", 10)
 	credits_label.modulate.a = 0.5
 	add_child(credits_label)
+	# persistent control legend, bottom-left (touch gets its own wording)
+	legend_label = Label.new()
+	legend_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	legend_label.position = Vector2(16, -26)
+	legend_label.custom_minimum_size = Vector2(700, 18)
+	legend_label.add_theme_font_size_override("font_size", 10)
+	legend_label.modulate.a = 0.45
+	legend_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	legend_label.visible = false
+	add_child(legend_label)
 	# floaters center
 	floaters = VBoxContainer.new()
 	floaters.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -169,16 +199,185 @@ func _ready() -> void:
 	add_child(floaters)
 	# labels never eat screen touches (drag-to-look must work everywhere else)
 	for c in [crosshair, hp_bg, hp_bar, level_label, kills_label, weapon_label,
-			outfit_label, caption_label, hint_label, credits_label, floaters]:
+			outfit_label, caption_label, hint_label, credits_label, floaters, skip_label]:
 		c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# gameplay chrome toggled off over the intro cinematic (show_intro/show_game)
+	_chrome = [crosshair, hp_bg, hp_bar, level_label, kills_label, weapon_label,
+		outfit_label, credits_label]
 	_build_pause()
 	_build_dead()
 	if main.touch_mode:
 		_build_touch()
+	_build_menu()
 	refresh()
+
+func _menu_toggle(cb: Callable, col: Color) -> Button:
+	# menu toggle button (GOD MODE / THIRD PERSON) — text set by sync_menu()
+	var b = Button.new()
+	b.custom_minimum_size = Vector2(240, 64)
+	b.add_theme_font_size_override("font_size", 20)
+	b.add_theme_color_override("font_color", col)
+	for s in ["normal", "hover", "pressed", "focus"]:
+		var st = StyleBoxFlat.new()
+		st.bg_color = Color(0.06, 0.06, 0.10, 0.9) if s != "pressed" else Color(0.22, 0.18, 0.05, 0.9)
+		st.set_corner_radius_all(12)
+		b.add_theme_stylebox_override(s, st)
+	b.pressed.connect(cb)
+	return b
+
+func _build_menu() -> void:
+	# START MENU — rider name, controls, toggles; RIDE plays the intro then the run
+	menu_panel = Control.new()
+	menu_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(menu_panel)
+	var bg = ColorRect.new()
+	bg.color = Color(0.01, 0.01, 0.03, 0.97)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	menu_panel.add_child(bg)
+	var box = VBoxContainer.new()
+	box.set_anchors_preset(Control.PRESET_CENTER)
+	box.position = Vector2(-400, -320)
+	box.custom_minimum_size = Vector2(800, 640)
+	box.add_theme_constant_override("separation", 10)
+	menu_panel.add_child(box)
+	var title = Label.new()
+	title.text = "CHUBBY'S REVENGE"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 64)
+	title.add_theme_color_override("font_color", Color(0.9, 0.05, 0.05))
+	box.add_child(title)
+	var sub = Label.new()
+	sub.text = "She rose. Now they pay."
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.add_theme_font_size_override("font_size", 20)
+	sub.add_theme_color_override("font_color", Color(0.85, 0.85, 0.9))
+	box.add_child(sub)
+	# rider identity — persisted in user://save.cfg next to lifetime_kills
+	var name_row = HBoxContainer.new()
+	name_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_child(name_row)
+	var nl = Label.new()
+	nl.text = "RIDER NAME   "
+	nl.add_theme_font_size_override("font_size", 18)
+	name_row.add_child(nl)
+	name_edit = LineEdit.new()
+	name_edit.text = main.rider_name
+	name_edit.max_length = 12
+	name_edit.custom_minimum_size = Vector2(240, 40)
+	name_edit.add_theme_font_size_override("font_size", 22)
+	name_edit.text_changed.connect(func(t):
+		main.rider_name = t.strip_edges().to_upper() if t.strip_edges() != "" else "BROOKE"
+		main.save_game())
+	name_row.add_child(name_edit)
+	lifetime_label = Label.new()
+	lifetime_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lifetime_label.add_theme_font_size_override("font_size", 16)
+	lifetime_label.add_theme_color_override("font_color", Color(1.0, 0.84, 0.0))
+	box.add_child(lifetime_label)
+	# CONTROLS — always on the menu, two columns
+	var panel = PanelContainer.new()
+	var pstyle = StyleBoxFlat.new()
+	pstyle.bg_color = Color(0.05, 0.05, 0.09, 0.9)
+	pstyle.set_corner_radius_all(10)
+	pstyle.set_content_margin_all(14)
+	panel.add_theme_stylebox_override("panel", pstyle)
+	box.add_child(panel)
+	var cbox = VBoxContainer.new()
+	cbox.add_theme_constant_override("separation", 8)
+	panel.add_child(cbox)
+	var cols = HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 48)
+	cbox.add_child(cols)
+	var c1 = Label.new()
+	c1.text = "MOUSE — AIM (click to lock)\nARROWS — AIM (NO MOUSE NEEDED)\nLEFT CLICK — SHOOT\nA/D — DODGE\nQ/E — TURN AT INTERSECTIONS\nSPACE — JUMP\nSHIFT — SLIDE\nF — BRAWL (8 ARTS, ON FOOT)\nV — DISMOUNT · E — KNOCK"
+	var c2 = Label.new()
+	c2.text = "C — CAMERA\nT — THIRD PERSON\nH — HORSE/BOARD\nO — OUTFIT\nX — AUTO-LOCK\nR — RESTART\nP/ESC — PAUSE"
+	for c in [c1, c2]:
+		c.add_theme_font_size_override("font_size", 15)
+		c.add_theme_color_override("font_color", Color(0.9, 0.9, 0.92))
+		cols.add_child(c)
+	var tnote = Label.new()
+	tnote.text = "touch devices: joystick = move, drag = aim, buttons = actions"
+	tnote.add_theme_font_size_override("font_size", 13)
+	tnote.add_theme_color_override("font_color", Color(0.7, 0.75, 0.8))
+	cbox.add_child(tnote)
+	# action buttons
+	var brow = HBoxContainer.new()
+	brow.alignment = BoxContainer.ALIGNMENT_CENTER
+	brow.add_theme_constant_override("separation", 16)
+	box.add_child(brow)
+	var ride = Button.new()
+	ride.text = "RIDE ▶"
+	ride.custom_minimum_size = Vector2(220, 64)
+	ride.add_theme_font_size_override("font_size", 34)
+	ride.add_theme_color_override("font_color", Color.WHITE)
+	for s in ["normal", "hover", "pressed", "focus"]:
+		var st = StyleBoxFlat.new()
+		st.bg_color = Color(0.55, 0.03, 0.03) if s != "pressed" else Color(0.8, 0.06, 0.06)
+		st.set_corner_radius_all(12)
+		ride.add_theme_stylebox_override(s, st)
+	ride.pressed.connect(func(): main.menu_done())
+	brow.add_child(ride)
+	god_btn = _menu_toggle(func(): main.toggle_god_mode(), Color(1.0, 0.84, 0.0))
+	tp_btn = _menu_toggle(func(): main.toggle_tp_default(), Color(0.6, 0.9, 1.0))
+	brow.add_child(god_btn)
+	brow.add_child(tp_btn)
+	menu_panel.visible = false
+
+func sync_menu() -> void:
+	god_btn.text = "GOD MODE: " + ("ON" if main.god_mode else "OFF")
+	tp_btn.text = "THIRD PERSON: " + ("ON" if main.tp_default else "OFF")
+	lifetime_label.text = "LIFETIME PUNKS: %d" % main.lifetime_kills
+
+func show_menu() -> void:
+	dead_panel.visible = false
+	pause_panel.visible = false
+	legend_label.visible = false
+	caption("")
+	clear_hint()
+	skip_label.visible = false
+	for c in _chrome:
+		c.visible = true
+	if touch_layer:
+		touch_layer.visible = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE   # cursor free for the menu
+	name_edit.text = main.rider_name
+	sync_menu()
+	menu_panel.visible = true
+
+func hide_menu() -> void:
+	menu_panel.visible = false
+
+func run_instructions(count: int) -> void:
+	# first 3 runs: staggered how-to cards; after that just a 4s "RIDE!" card
+	if count <= 3:
+		var cards = [
+			"AIM WITH MOUSE OR ARROW KEYS — CLICK IF THE CURSOR IS STUCK",
+			"A/D DODGE · Q/E TURN · F BRAWL ON FOOT (V)",
+			"X AUTO-LOCK IS ON — SHE AIMS HERSELF",
+		]
+		if main.touch_mode:
+			cards[0] = "JOYSTICK MOVES · DRAG TO AIM"
+		for i in cards.size():
+			var txt: String = cards[i]
+			get_tree().create_timer(1.0 + i * 2.0).timeout.connect(
+				func(): floater(txt, Color(0.92, 0.92, 0.95), 18))
+	else:
+		floater("RIDE!", Color(0.92, 0.92, 0.95), 26, 4.0)
+
+func show_aim_hint() -> void:
+	if not _aim_hint_on:
+		_aim_hint_on = true
+		hint("CLICK TO AIM")
+
+func hide_aim_hint() -> void:
+	if _aim_hint_on and hint_label.text == "CLICK TO AIM":
+		clear_hint()
 
 func _build_pause() -> void:
 	pause_panel = Control.new()
+	# PAUSE FIX: the whole pause UI must stay live while the tree is paused
+	pause_panel.process_mode = Node.PROCESS_MODE_ALWAYS
 	pause_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	var bg = ColorRect.new()
 	bg.color = Color(0, 0, 0, 0.75)
@@ -189,7 +388,23 @@ func _build_pause() -> void:
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	t.add_theme_font_size_override("font_size", 32)
 	t.set_anchors_preset(Control.PRESET_CENTER)
+	t.position = Vector2(0, -80)
 	pause_panel.add_child(t)
+	# clickable RESUME — keyboard-free way out of the pause menu
+	var resume = Button.new()
+	resume.text = "RESUME"
+	resume.custom_minimum_size = Vector2(240, 64)
+	resume.add_theme_font_size_override("font_size", 24)
+	resume.add_theme_color_override("font_color", Color.WHITE)
+	for s in ["normal", "hover", "pressed", "focus"]:
+		var st = StyleBoxFlat.new()
+		st.bg_color = Color(0.55, 0.03, 0.03) if s != "pressed" else Color(0.8, 0.06, 0.06)
+		st.set_corner_radius_all(12)
+		resume.add_theme_stylebox_override(s, st)
+	resume.set_anchors_preset(Control.PRESET_CENTER)
+	resume.position = Vector2(-120, 110)
+	resume.pressed.connect(func(): main.toggle_pause())
+	pause_panel.add_child(resume)
 	pause_panel.visible = false
 	add_child(pause_panel)
 
@@ -209,13 +424,22 @@ func _build_dead() -> void:
 	dead_panel.visible = false
 	add_child(dead_panel)
 	if main.touch_mode:
-		# no keyboard on a phone — big restart button on the death screen
+		# no keyboard on a phone — big restart + menu buttons on the death screen
 		var rb = _touch_btn("RIDE AGAIN", func(): main.start_run(), false)
 		rb.process_mode = Node.PROCESS_MODE_ALWAYS
 		rb.custom_minimum_size = Vector2(220, 64)
 		rb.set_anchors_preset(Control.PRESET_CENTER)
 		rb.position = Vector2(-110, 120)
 		dead_panel.add_child(rb)
+		var to_menu := func():
+			main.state = main.S.MENU
+			main.hud.show_menu()
+		var mb = _touch_btn("MENU", to_menu, false)
+		mb.process_mode = Node.PROCESS_MODE_ALWAYS
+		mb.custom_minimum_size = Vector2(220, 64)
+		mb.set_anchors_preset(Control.PRESET_CENTER)
+		mb.position = Vector2(-110, 200)
+		dead_panel.add_child(mb)
 
 func _touch_btn(text: String, cb: Callable, in_ride := true) -> Button:
 	# semi-transparent dark action button; in_ride buttons only fire while riding
@@ -282,7 +506,7 @@ func _build_touch() -> void:
 	touch_layer.add_child(pause_btn)
 	touch_layer.visible = false   # shown by show_game() once the run starts
 
-func floater(text: String, color := Color.WHITE, size := 22) -> void:
+func floater(text: String, color := Color.WHITE, size := 22, hold := 1.8) -> void:
 	var l = Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", size)
@@ -290,7 +514,7 @@ func floater(text: String, color := Color.WHITE, size := 22) -> void:
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	floaters.add_child(l)
 	var tw = create_tween()
-	tw.tween_interval(1.8)
+	tw.tween_interval(hold)
 	tw.tween_property(l, "modulate:a", 0.0, 0.6)
 	tw.tween_callback(l.queue_free)
 
@@ -303,6 +527,7 @@ func hint(text: String) -> void:
 
 func clear_hint() -> void:
 	hint_label.visible = false
+	_aim_hint_on = false
 
 func flash_red() -> void:
 	flash_rect.modulate.a = 0.7
@@ -319,17 +544,34 @@ func refresh() -> void:
 	hp_bar.size.x = 216 * clampf(main.health / 100.0, 0, 1)
 	hp_bar.color = Color(1, 0.84, 0) if main.god_mode else Color(0.9, 0.2, 0.2)
 	var lvl = "LEVEL %d/10 — %s" % [main.wave, main.LEVELS[main.wave-1]] if main.wave >= 1 and main.wave <= 10 else ("ENDLESS — WAVE %d" % main.wave if main.wave > 10 else "GET READY")
-	level_label.text = lvl + ("  •  GOD MODE" if main.god_mode else "")
+	level_label.text = main.rider_name + " • " + lvl + ("  •  GOD MODE" if main.god_mode else "")
 	kills_label.text = "PUNKS DOWN: %d   CITY LOVE: %d%%   LIFETIME: %d" % [main.kills, int(main.city_love), main.lifetime_kills]
 	if main.player:
 		weapon_label.text = "WEAPON: " + main.player.WEAPONS[main.player.weapon]["n"]
 		outfit_label.text = "OUTFIT: " + main.Outfits.OUTFITS[main.outfit]["n"]
 
+func show_intro() -> void:
+	# INTRO CINEMATIC — hide gameplay chrome (crosshair/HP/level/kills/legend/credits)
+	# and show a dim skip prompt; chrome is restored by show_game()/show_menu()
+	menu_panel.visible = false
+	legend_label.visible = false
+	clear_hint()
+	for c in _chrome:
+		c.visible = false
+	skip_label.text = "TAP — SKIP" if main.touch_mode else "ANY KEY — SKIP"
+	skip_label.visible = true
+
 func show_game() -> void:
 	dead_panel.visible = false
 	pause_panel.visible = false
+	menu_panel.visible = false
 	caption("")
 	clear_hint()
+	skip_label.visible = false
+	for c in _chrome:
+		c.visible = true
+	legend_label.text = "joystick move · drag aim · FIRE/BRAWL/JUMP/SLIDE on the right" if main.touch_mode else "LMB shoot · ARROWS aim · A/D dodge · Q/E turn · V foot · F brawl · C cam · T third-person · P pause"
+	legend_label.visible = true
 	if touch_layer:
 		touch_layer.visible = true
 		for c in touch_layer.get_children():
@@ -350,8 +592,10 @@ func hide_pause() -> void:
 			c.visible = true
 
 func show_dead(kills: int, wave: int) -> void:
-	dead_panel.get_node("DeadText").text = "SHE'S DOWN\n\n%d punks down, wave %d\n\nR — RIDE AGAIN" % [kills, wave]
+	var keys = "R — RIDE AGAIN\nM — MENU"
+	dead_panel.get_node("DeadText").text = "SHE'S DOWN\n\n%d punks down, wave %d\n\n%s" % [kills, wave, keys]
 	dead_panel.visible = true
+	legend_label.visible = false
 	clear_hint()
 	if touch_layer:
 		touch_layer.visible = false
