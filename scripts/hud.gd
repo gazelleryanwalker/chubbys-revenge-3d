@@ -1,7 +1,72 @@
 extends CanvasLayer
-## HUD: health bar, level line, floaters, crosshair, pause menu, death screen.
+## HUD: health bar, level line, floaters, crosshair, pause menu, death screen,
+## plus the full touch-control layer (virtual joystick + buttons) for touch_mode.
+
+class Joystick:
+	## Virtual thumbstick (bottom-left). Drag inside the ring -> main.joy_vec (-1..1).
+	extends Control
+	var main
+	var knob := Vector2.ZERO
+	var dragging := false
+	const R_OUT := 70.0
+	const R_IN := 28.0
+
+	func _init() -> void:
+		custom_minimum_size = Vector2(190, 190)
+		size = Vector2(190, 190)
+		mouse_filter = Control.MOUSE_FILTER_STOP
+
+	func _draw() -> void:
+		var c = size / 2.0
+		draw_circle(c, R_OUT, Color(1, 1, 1, 0.07))
+		draw_arc(c, R_OUT, 0.0, TAU, 48, Color(1, 1, 1, 0.35), 3.0)
+		if dragging:
+			var kc = c + knob * (R_OUT - R_IN)
+			draw_circle(kc, R_IN, Color(1, 1, 1, 0.32))
+			draw_arc(kc, R_IN, 0.0, TAU, 32, Color(1, 1, 1, 0.6), 2.0)
+		else:
+			draw_circle(c, R_IN, Color(1, 1, 1, 0.16))
+
+	func _stick(p: Vector2) -> void:
+		var v = (p - size / 2.0) / (R_OUT - R_IN)
+		if v.length() > 1.0:
+			v = v.normalized()
+		knob = v
+		main.joy_vec = v   # x: lane dodge target; y: unused
+		queue_redraw()
+
+	func _release() -> void:
+		dragging = false
+		knob = Vector2.ZERO
+		main.joy_vec = Vector2.ZERO
+		queue_redraw()
+
+	func _gui_input(event: InputEvent) -> void:
+		if event is InputEventScreenTouch:
+			if event.pressed:
+				dragging = true
+				_stick(event.position)
+			else:
+				_release()
+			accept_event()
+		elif event is InputEventScreenDrag:
+			dragging = true
+			_stick(event.position)
+			accept_event()
+
+	func _input(event: InputEvent) -> void:
+		# keep tracking even if the drag wanders outside the ring zone
+		if not dragging:
+			return
+		if event is InputEventScreenTouch and not event.pressed:
+			_release()
+		elif event is InputEventScreenDrag:
+			_stick(get_global_transform_with_canvas().affine_inverse() * event.position)
 
 var main
+var touch_layer: Control = null
+var pause_btn: Button = null
+var joy = null
 
 var hp_bar: ColorRect
 var level_label: Label
@@ -102,8 +167,14 @@ func _ready() -> void:
 	floaters.custom_minimum_size = Vector2(800, 0)
 	floaters.alignment = BoxContainer.ALIGNMENT_CENTER
 	add_child(floaters)
+	# labels never eat screen touches (drag-to-look must work everywhere else)
+	for c in [crosshair, hp_bg, hp_bar, level_label, kills_label, weapon_label,
+			outfit_label, caption_label, hint_label, credits_label, floaters]:
+		c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_build_pause()
 	_build_dead()
+	if main.touch_mode:
+		_build_touch()
 	refresh()
 
 func _build_pause() -> void:
@@ -114,7 +185,7 @@ func _build_pause() -> void:
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	pause_panel.add_child(bg)
 	var t = Label.new()
-	t.text = "PAUSED\n\nP / ESC — RESUME\nR — RESTART"
+	t.text = "PAUSED\n\nTAP II TO RESUME" if main.touch_mode else "PAUSED\n\nP / ESC — RESUME\nR — RESTART"
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	t.add_theme_font_size_override("font_size", 32)
 	t.set_anchors_preset(Control.PRESET_CENTER)
@@ -137,6 +208,79 @@ func _build_dead() -> void:
 	dead_panel.add_child(t)
 	dead_panel.visible = false
 	add_child(dead_panel)
+	if main.touch_mode:
+		# no keyboard on a phone — big restart button on the death screen
+		var rb = _touch_btn("RIDE AGAIN", func(): main.start_run(), false)
+		rb.process_mode = Node.PROCESS_MODE_ALWAYS
+		rb.custom_minimum_size = Vector2(220, 64)
+		rb.set_anchors_preset(Control.PRESET_CENTER)
+		rb.position = Vector2(-110, 120)
+		dead_panel.add_child(rb)
+
+func _touch_btn(text: String, cb: Callable, in_ride := true) -> Button:
+	# semi-transparent dark action button; in_ride buttons only fire while riding
+	var b = Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(64, 64)
+	b.add_theme_font_size_override("font_size", 18)
+	b.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
+	for s in ["normal", "hover", "pressed", "focus"]:
+		var st = StyleBoxFlat.new()
+		st.bg_color = Color(0.9, 0.8, 0.2, 0.55) if s == "pressed" else Color(0.02, 0.02, 0.05, 0.5)
+		st.set_corner_radius_all(14)
+		b.add_theme_stylebox_override(s, st)
+	b.pressed.connect(func():
+		if not in_ride or main.state == main.S.RIDE:
+			cb.call())
+	return b
+
+func _build_touch() -> void:
+	# full touch-control layer for touch_mode (iPhone Safari web export)
+	touch_layer = Control.new()
+	touch_layer.name = "TouchUI"
+	touch_layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	touch_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE   # empty areas = drag-to-look
+	add_child(touch_layer)
+	# a) virtual joystick, bottom-left
+	joy = Joystick.new()
+	joy.main = main
+	joy.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	joy.position = Vector2(24, -214)
+	touch_layer.add_child(joy)
+	# c) buttons, right side: utility column + combat column
+	var row = HBoxContainer.new()
+	row.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	row.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	row.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	row.position = Vector2(-20, -20)
+	row.add_theme_constant_override("separation", 12)
+	touch_layer.add_child(row)
+	var col_a = VBoxContainer.new()
+	var col_b = VBoxContainer.new()
+	for c in [col_a, col_b]:
+		c.add_theme_constant_override("separation", 8)
+	row.add_child(col_a)
+	row.add_child(col_b)
+	col_a.add_child(_touch_btn("KNOCK", func(): main.try_knock()))
+	col_a.add_child(_touch_btn("AUTO", func(): main.player.toggle_autolock()))
+	col_a.add_child(_touch_btn("TP", func(): main.player.toggle_view()))
+	col_a.add_child(_touch_btn("CAM", func(): main.player.cycle_cam()))
+	col_a.add_child(_touch_btn("FOOT", func(): main.player.toggle_foot()))
+	col_b.add_child(_touch_btn("SLIDE", func(): main.player.do_slide()))
+	col_b.add_child(_touch_btn("JUMP", func(): main.player.do_jump()))
+	col_b.add_child(_touch_btn("BRAWL", func(): main.player.brawl_strike()))
+	var fire = _touch_btn("FIRE", func(): main.player.shoot())
+	fire.custom_minimum_size = Vector2(88, 88)
+	fire.add_theme_font_size_override("font_size", 22)
+	col_b.add_child(fire)
+	# d) pause, top-center — must respond while the tree is paused
+	pause_btn = _touch_btn("II", func(): main.toggle_pause(), false)
+	pause_btn.process_mode = Node.PROCESS_MODE_ALWAYS
+	pause_btn.custom_minimum_size = Vector2(72, 40)
+	pause_btn.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	pause_btn.position = Vector2(-36, 14)
+	touch_layer.add_child(pause_btn)
+	touch_layer.visible = false   # shown by show_game() once the run starts
 
 func floater(text: String, color := Color.WHITE, size := 22) -> void:
 	var l = Label.new()
@@ -186,18 +330,31 @@ func show_game() -> void:
 	pause_panel.visible = false
 	caption("")
 	clear_hint()
+	if touch_layer:
+		touch_layer.visible = true
+		for c in touch_layer.get_children():
+			c.visible = true
 	refresh()
 
 func show_pause() -> void:
 	pause_panel.visible = true
+	if touch_layer:
+		# only the pause button stays live over the pause panel
+		for c in touch_layer.get_children():
+			c.visible = (c == pause_btn)
 
 func hide_pause() -> void:
 	pause_panel.visible = false
+	if touch_layer:
+		for c in touch_layer.get_children():
+			c.visible = true
 
 func show_dead(kills: int, wave: int) -> void:
 	dead_panel.get_node("DeadText").text = "SHE'S DOWN\n\n%d punks down, wave %d\n\nR — RIDE AGAIN" % [kills, wave]
 	dead_panel.visible = true
 	clear_hint()
+	if touch_layer:
+		touch_layer.visible = false
 
 func _process(_delta: float) -> void:
 	if main.state == main.S.RIDE:

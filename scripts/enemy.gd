@@ -31,7 +31,7 @@ func setup(p_boss: bool, wave: int) -> void:
 func _mat(c: Color, rough := 0.5, metal := 0.0, emis := Color.BLACK, e := 0.0) -> StandardMaterial3D:
 	var m = StandardMaterial3D.new()
 	m.albedo_color = c; m.roughness = rough; m.metalness = metal
-	m.emission_enabled = e > 0; m.emission = emis; m.emission_energy_multiplier = e
+	m.emission_enabled = e > 0; m.emission_energy_multiplier = e
 	return m
 
 func _build() -> void:
@@ -114,6 +114,7 @@ func die() -> void:
 	main.on_enemy_killed(self)
 	if boss:
 		main.hud.floater("KILLER IS DEAD", Color.RED, 40)
+		main.killcam(head_pos)   # slow-mo kill-cam orbits the death spot
 	elif randf() < 0.25:
 		main.hud.floater("HEAD SPLIT!", Color(1, 0.4, 0.4), 20)
 	queue_free()
