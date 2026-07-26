@@ -21,6 +21,10 @@ Brooke was out cruising the neighborhood on her skateboard when two kids on dirt
 - **Knock on houses** in the suburbs while on foot (E) — residents answer with intel, city love, or stars
 - **Side-street turns** — intersections appear ahead with green street signs; A/D to turn onto a new street
 - **Real GLB models** replace all primitives: characters, houses, weapons, bikes, the horse
+- **Full touch controls** — virtual joystick, drag-to-look, and on-screen buttons; playable on iPhone Safari at http://2.25.205.134/play/
+- **Third-person view of Brooke** (T key) — orbit camera behind her real rigged model
+- **Boss kill-cams** — slow-mo orbit around the death spot when a boss goes down
+- **macOS + Web builds now available** — see Prebuilt binaries below
 
 ## Real 3D assets
 
@@ -43,19 +47,21 @@ Full credit list and links: [ATTRIBUTION.md](ATTRIBUTION.md).
 3. Open `project.godot` in the Godot editor.
 4. Press **F5** to run.
 
-Exports: presets are included in `export_presets.cfg` — use **Project > Export** in the editor.
+Exports: presets are included in `export_presets.cfg` (Linux, Windows, macOS, Web) — use **Project > Export** in the editor.
 
 ### Prebuilt binaries
 
 - Windows: http://2.25.205.134/builds/chubbys-revenge-windows.exe
 - Linux: http://2.25.205.134/builds/chubbys-revenge-linux.x86_64
+- macOS: http://2.25.205.134/builds/chubbys-revenge-mac.zip
+- Web (play in browser, touch-friendly on iPhone Safari): http://2.25.205.134/play/
 
 ## Verifier
 
-Headless acceptance checks live in `verifier/`. To run the current suite (v3):
+Headless acceptance checks live in `verifier/`. To run the current suite (v4):
 
 ```sh
-verifier/v3/check.sh
+verifier/v4/check.sh
 ```
 
 Requires a Linux box with the headless Godot 4.3 binary available. See `verifier/README.md` for details.
