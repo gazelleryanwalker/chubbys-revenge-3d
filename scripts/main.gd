@@ -39,6 +39,8 @@ var lifetime_kills := 0
 var outfit := 0
 var drops: Array = []
 var knock_cd := 0.0
+var touch_mode := false      # true on touchscreens (iPhone Safari web export) — HUD builds touch UI
+var joy_vec := Vector2.ZERO  # virtual joystick output (-1..1), x = lane dodge target
 var turn_offer = null        # null or {"name": String, "t": float}
 var next_turn_in := randf_range(22.0, 40.0)
 var _hint_mode := ""
@@ -55,8 +57,13 @@ var _test_phase := 0
 var _introtest := false
 var _introtest_t := 0.0
 
+
 func _ready() -> void:
 	_setup_input()
+	# touch controls: real touchscreens, incl. the Web export on iPhone Safari
+	touch_mode = DisplayServer.is_touchscreen_available() or (OS.has_feature("web") and DisplayServer.is_touchscreen_available())
+	if OS.has_environment("CHUBBY_FORCE_TOUCH"):   # test hook: exercise the touch UI path
+		touch_mode = OS.get_environment("CHUBBY_FORCE_TOUCH") == "1"
 	world = Node3D.new()
 	world.set_script(WorldBuilder)
 	world.name = "World"
@@ -97,7 +104,7 @@ func _setup_input() -> void:
 		"shoot": [MOUSE_BUTTON_LEFT], "brawl": [KEY_F], "jump": [KEY_SPACE],
 		"slide": [KEY_SHIFT], "cam": [KEY_C], "transport": [KEY_H],
 		"foot": [KEY_V], "knock": [KEY_E], "autolock": [KEY_X], "nvg": [KEY_N],
-		"outfit": [KEY_O],
+		"outfit": [KEY_O], "tpview": [KEY_T],
 		"dodge_left": [KEY_A], "dodge_right": [KEY_D],
 	}
 	for action in binds:
@@ -121,6 +128,8 @@ func start_run() -> void:
 	wave_spawned = 0; wave_killed = 0
 	zone_idx = 0
 	knock_cd = 0.0
+	Engine.time_scale = 1.0   # safety: killcam slow-mo never survives a restart
+	joy_vec = Vector2.ZERO
 	turn_offer = null
 	next_turn_in = randf_range(22.0, 40.0)
 	_hint_mode = ""
@@ -189,6 +198,16 @@ func spawn_drop(pos: Vector3) -> void:
 	add_child(d)
 	d.position = Vector3(pos.x, 1.1, pos.z)
 	drops.append(d)
+
+func killcam(boss_pos: Vector3) -> void:
+	# BOSS KILL-CAM — slow motion + orbital camera on the death spot
+	if state != S.RIDE:
+		return
+	Engine.time_scale = 0.25
+	player.killcam(boss_pos)
+	# restore in REAL time (ignore_time_scale=true), restart also resets in start_run
+	get_tree().create_timer(1.2, true, false, true).timeout.connect(
+		func(): Engine.time_scale = 1.0)
 
 func _set_hint(mode: String, text := "") -> void:
 	_hint_mode = mode

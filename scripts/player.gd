@@ -50,11 +50,16 @@ var weapon_t := 0.0
 var outfit_idx := 0
 var swing_t := 0.0
 var swing_dir := 0
+var view_mode := "fp"        # "fp" first-person rigs / "tp" third-person orbit behind Brooke
+var killcam_t := 0.0         # >0 while the boss kill-cam owns the camera
+var killcam_pos := Vector3.ZERO
+var killcam_orbit := 0.0
 
 var cam: Camera3D
 var gun: Node3D
 var board: Node3D
 var horse_fp: Node3D
+var girl_tp: Node3D
 var gun_models: Dictionary = {}
 var stock: MeshInstance3D
 var hands: Array = []
@@ -85,6 +90,7 @@ func _ready() -> void:
 	_build_board()
 	_build_horse()
 	_build_outfit()
+	_build_girl_tp()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _mat(color: Color, rough := 0.5, metal := 0.0, emis := Color.BLACK, e := 0.0) -> StandardMaterial3D:
@@ -196,19 +202,70 @@ func _build_board() -> void:
 	glow.position = Vector3(0, -0.3, 0)
 	board.add_child(glow)
 
+func _build_girl_tp() -> void:
+	# THIRD-PERSON BROOKE — real girl.glb riding her deck, parented to the player
+	# (NOT the cam) so the TP orbit camera sees her; hidden in first person
+	girl_tp = Node3D.new()
+	girl_tp.rotation.y = PI   # she faces -z, the travel direction
+	girl_tp.visible = false
+	add_child(girl_tp)
+	var model = Models.inst("res://assets/characters/girl.glb")
+	if model != null:
+		Models.fit_height(model, 1.55)
+		girl_tp.add_child(model)
+		Models.play_anim(model, ["skate", "drive", "idle"])
+	else:
+		var body = MeshInstance3D.new()
+		body.mesh = CapsuleMesh.new(); body.mesh.radius = 0.22; body.mesh.height = 1.15
+		body.material_override = _mat(Color(0.9, 0.88, 0.86), 0.85)
+		body.position = Vector3(0, 0.9, 0)
+		girl_tp.add_child(body)
+	var deck = MeshInstance3D.new()
+	deck.mesh = BoxMesh.new(); deck.mesh.size = Vector3(0.45, 0.04, 1.1)
+	deck.material_override = _mat(Color(0.2, 0.12, 0.06), 0.7)
+	deck.position = Vector3(0, 0.1, 0)
+	girl_tp.add_child(deck)
+
 func on_run_start() -> void:
 	yaw = 0; pitch = 0; lane_x = 0; lane_cur = 0; combo = 0
 	on_foot = false
 	transport = "board"
 	weapon = "shotgun"
 	weapon_t = 0.0
+	view_mode = "fp"     # every run starts in first person, Brooke body hidden
+	killcam_t = 0.0
 	_recolor_gun()
-	_update_transport_vis()
+	_update_view_vis()
 	apply_outfit(main.outfit)
 
 func _update_transport_vis() -> void:
-	board.visible = not on_foot and transport == "board"
-	horse_fp.visible = not on_foot and transport == "horse"
+	var fp := view_mode == "fp"
+	board.visible = fp and not on_foot and transport == "board"
+	horse_fp.visible = fp and not on_foot and transport == "horse"
+
+func _update_view_vis() -> void:
+	# FP rigs (gun/board/horse_fp/chest/tie/veil) vs the third-person Brooke body
+	var tp := view_mode == "tp"
+	if girl_tp:
+		girl_tp.visible = tp
+	gun.visible = not tp
+	chest.visible = not tp
+	var o = Outfits.OUTFITS[outfit_idx]
+	tie.visible = o["tie"] and not tp
+	veil.visible = o["veil"] and not tp
+	_update_transport_vis()
+
+func toggle_view() -> void:
+	view_mode = "fp" if view_mode == "tp" else "tp"
+	_update_view_vis()
+	main.hud.floater("THIRD PERSON" if view_mode == "tp" else "FIRST PERSON", Color(0.6, 0.9, 1), 16)
+
+func killcam(boss_pos: Vector3) -> void:
+	# boss kill-cam owns the camera while killcam_t > 0 (decays in REAL time)
+	killcam_t = 1.5
+	killcam_pos = boss_pos
+	killcam_orbit = atan2(cam.global_position.x - boss_pos.x, cam.global_position.z - boss_pos.z)
+	main.hud.floater("KILL-CAM", Color(1, 0.35, 0.35), 16)
 
 func toggle_transport() -> void:
 	transport = "horse" if transport == "board" else "board"
@@ -223,8 +280,7 @@ func apply_outfit(idx: int) -> void:
 	for h in hands:
 		h.material_override = _mat(ac.lightened(0.15), 0.8)
 	chest.material_override = _mat(ac, 0.6, 0.1, ac, 0.35)
-	tie.visible = o["tie"]
-	veil.visible = o["veil"]
+	_update_view_vis()   # tie/veil visibility is view-aware (FP only)
 
 func cycle_outfit() -> void:
 	var list = Outfits.unlocked_list(main.lifetime_kills)
@@ -250,12 +306,25 @@ func set_weapon(id: String) -> void:
 	main.hud.floater(WEAPONS[id]["n"] + " PICKED UP", Color(1, 0.8, 0.3), 24)
 	main.hud.refresh()
 
+func cycle_cam() -> void:
+	cam_mode = (cam_mode + 1) % CAMS.size()
+	auto_cam_t = 0.0
+	main.hud.floater("CAM: " + CAMS[cam_mode]["n"], Color(0.6, 0.9, 1), 14)
+
+func toggle_autolock() -> void:
+	auto_lock = not auto_lock
+	main.hud.floater("AUTO-LOCK ON" if auto_lock else "AUTO-LOCK OFF", Color.GOLD, 16)
+
 func _unhandled_input(event: InputEvent) -> void:
 	if main.state != main.S.RIDE:
 		return
 	if event is InputEventMouseMotion:
 		yaw = clampf(yaw - event.relative.x * 0.0026, -1.15, 1.15)
 		pitch = clampf(pitch - event.relative.y * 0.0022, -0.45, 0.5)
+	if event is InputEventScreenDrag:
+		# touch drag-to-look (screen area outside the joystick/buttons)
+		yaw = clampf(yaw - event.relative.x * 0.004, -1.15, 1.15)
+		pitch = clampf(pitch - event.relative.y * 0.0035, -0.45, 0.5)
 	if event.is_action_pressed("shoot") and not on_foot:
 		shoot()
 	elif event.is_action_pressed("jump"):
@@ -271,12 +340,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("outfit"):
 		cycle_outfit()
 	elif event.is_action_pressed("cam"):
-		cam_mode = (cam_mode + 1) % CAMS.size()
-		auto_cam_t = 0.0
-		main.hud.floater("CAM: " + CAMS[cam_mode]["n"], Color(0.6, 0.9, 1), 14)
+		cycle_cam()
+	elif event.is_action_pressed("tpview"):
+		toggle_view()
 	elif event.is_action_pressed("autolock"):
-		auto_lock = not auto_lock
-		main.hud.floater("AUTO-LOCK ON" if auto_lock else "AUTO-LOCK OFF", Color.GOLD, 16)
+		toggle_autolock()
 	elif event.is_action_pressed("knock"):
 		main.try_knock()
 	elif event.is_action_pressed("dodge_left"):
@@ -354,6 +422,15 @@ func brawl_strike() -> void:
 func _physics_process(delta: float) -> void:
 	if main.state != main.S.RIDE:
 		return
+	if killcam_t > 0.0:
+		# BOSS KILL-CAM — orbit the death spot at 3m; decays in real time
+		var real_dt = delta / maxf(Engine.time_scale, 0.01)
+		killcam_t = maxf(0.0, killcam_t - real_dt)
+		killcam_orbit += real_dt * 1.4
+		cam.global_position = killcam_pos + Vector3(sin(killcam_orbit) * 3.0, 1.8, cos(killcam_orbit) * 3.0)
+		cam.look_at(killcam_pos, Vector3.UP)
+		muzzle_flash.light_energy = max(0.0, muzzle_flash.light_energy - delta * 40)
+		return
 	gallop += delta
 	muzzle_flash.light_energy = max(0.0, muzzle_flash.light_energy - delta * 40)
 	shake = max(0.0, shake - delta * 26)
@@ -397,6 +474,12 @@ func _physics_process(delta: float) -> void:
 			if abs(want_yaw - yaw) < 0.09 and abs(want_pitch - pitch) < 0.12 and auto_fire_t <= 0:
 				shoot()
 				auto_fire_t = WEAPONS[weapon]["rate"]
+	# touch joystick: overrides the keyboard dodge lanes while pushed (y unused)
+	if main.joy_vec.length() > 0.25:
+		lane_x = clampf(main.joy_vec.x * 4.6, -4.6, 4.6)
+		# touch: hard flick at the joystick edge takes side-street turns
+		if main.turn_offer != null and abs(main.joy_vec.x) > 0.85:
+			main.take_turn(1 if main.joy_vec.x > 0 else -1)
 	# camera
 	lane_cur += (lane_x - lane_cur) * min(1.0, delta * 9)
 	var base_h = 1.62 if on_foot else 2.7
@@ -407,13 +490,24 @@ func _physics_process(delta: float) -> void:
 		cy += sin((1.0 - move_t / 0.55) * PI) * 0.9
 	elif move_kind == "slide" and move_t > 0:
 		cy = lerp(cy, 0.8, sin((1.0 - move_t / 0.5) * PI))
-	cam.position = Vector3(lane_cur + co["x"], cy, 0)
-	if shake > 0:
-		cam.position.x += randf_range(-1, 1) * shake * 0.02
-		cam.position.y += randf_range(-1, 1) * shake * 0.02
 	# side-street turn swing: temporary yaw offset, out and back over 0.8s
 	swing_t = maxf(0.0, swing_t - delta)
 	var swing_off := 0.0
 	if swing_t > 0.0:
 		swing_off = sin((1.0 - swing_t / 0.8) * PI) * 1.2 * float(swing_dir)
-	cam.rotation = Vector3(pitch + sin(gallop * 3.1) * 0.01, yaw + swing_off, 0)
+	if view_mode == "tp":
+		# THIRD-PERSON — orbit cam behind+above, Brooke's body carries the lane
+		girl_tp.position.x = lane_cur
+		girl_tp.position.y = maxf(0.0, cy - base_h) * 0.5   # jump/slide lift
+		var off = Vector3(sin(yaw + swing_off) * 6.5, 4.2 + pitch * 3.0, cos(yaw + swing_off) * 6.5)
+		cam.position = Vector3(lane_cur, 0, 0) + off
+		if shake > 0:
+			cam.position.x += randf_range(-1, 1) * shake * 0.02
+			cam.position.y += randf_range(-1, 1) * shake * 0.02
+		cam.look_at(global_position + Vector3(lane_cur, 1.5, 0), Vector3.UP)
+	else:
+		cam.position = Vector3(lane_cur + co["x"], cy, 0)
+		if shake > 0:
+			cam.position.x += randf_range(-1, 1) * shake * 0.02
+			cam.position.y += randf_range(-1, 1) * shake * 0.02
+		cam.rotation = Vector3(pitch + sin(gallop * 3.1) * 0.01, yaw + swing_off, 0)
