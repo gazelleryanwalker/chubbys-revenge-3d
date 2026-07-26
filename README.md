@@ -1,6 +1,6 @@
 # Chubby's Revenge 3D
 
-A revenge FPS built in **Godot 4.3** — GDScript, fully procedural (no external assets).
+A revenge FPS built in **Godot 4.3** — GDScript, with real CC0/CC-BY 3D assets (see [ATTRIBUTION.md](ATTRIBUTION.md)).
 
 ## Story
 
@@ -18,12 +18,30 @@ Brooke was out cruising the neighborhood on her skateboard when two kids on dirt
 - Weapon drops
 - Opening cinematic
 - Procedural heavy-riff music
+- **Knock on houses** in the suburbs while on foot (E) — residents answer with intel, city love, or stars
+- **Side-street turns** — intersections appear ahead with green street signs; A/D to turn onto a new street
+- **Real GLB models** replace all primitives: characters, houses, weapons, bikes, the horse
+
+## Real 3D assets
+
+All character, vehicle, weapon, and building models are real GLBs loaded through `scripts/model_loader.gd` (cached load, measure/fit, animation picking):
+
+- **Kenney — Mini Skate pack** (CC0): skate-girl and skate-boy characters, skateboard deck
+- **Kenney — City Kit: Suburban** (CC0): 12 suburban house models lining Maple Street
+- **KayKit — Adventurers Character Pack** (CC0, Kay Lousberg): rigged Barbarian/Knight/Rogue punks, door-knock residents, funeral mourners
+- **Quaternius** (CC0): rigged/animated white horse, shotgun, sawed-off, revolver, barbed bat
+- **Motorcycle** — Corentin Fatus, **CC-BY 4.0** (via poly.pizza): the punks' dirt bikes
+
+Full credit list and links: [ATTRIBUTION.md](ATTRIBUTION.md).
+
+> **Note:** the `assets/` folder (~16 MB of GLBs) is **not tracked in git**. Download the models separately using the links in ATTRIBUTION.md and place them under `assets/` (`characters/`, `houses/`, `weapons/`, `animals/`, `vehicles/`, `props/`), or grab a prebuilt binary release — binaries have the assets baked in.
 
 ## Build & Run
 
 1. Install [Godot 4.3](https://godotengine.org/download).
-2. Open `project.godot` in the Godot editor.
-3. Press **F5** to run.
+2. Download the GLB assets per [ATTRIBUTION.md](ATTRIBUTION.md) into `assets/` (skip this for binary releases).
+3. Open `project.godot` in the Godot editor.
+4. Press **F5** to run.
 
 Exports: presets are included in `export_presets.cfg` — use **Project > Export** in the editor.
 

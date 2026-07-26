@@ -8,6 +8,7 @@ const HudScript = preload("res://scripts/hud.gd")
 const IntroScript = preload("res://scripts/intro.gd")
 const MusicScript = preload("res://scripts/music.gd")
 const Outfits = preload("res://scripts/outfits.gd")
+const Models = preload("res://scripts/model_loader.gd")
 
 enum S { MENU, INTRO, RIDE, DEAD, PAUSED }
 
@@ -16,6 +17,10 @@ const LEVELS = ["MAPLE STREET","POPLAR AVE","THE CUL-DE-SAC","COUNTY ROAD 9","TH
 const LEVEL_ZONES = [0,0,1,1,2,0,1,2,2,2]
 const TAUNTS = ["EAT ASPHALT, FREAK!","CAN'T CATCH US!","OUR STREET NOW, #@$%!","WATCH THIS, LOSER!",
 	"SHE'S BACK? BIG DEAL!","CRY ABOUT IT!","NICE KNEE! HA!","WE OWN THIS TOWN!","TOO SLOW, $#@&!","COME GET SOME!"]
+const RESIDENTS = ["You're the girl from the news. God help you.","They garage those bikes two streets over.",
+	"My nephew rides with them. I'm sorry, kid.","Half this block keeps bats by the door now. Go get 'em.",
+	"They laugh about it at the gas station. LAUGH.","Be careful, mija. They run in a pack."]
+const TURN_NAMES = ["POPLAR AVE", "CUL-DE-SAC CT", "BARN RD", "MAPLE CT"]
 
 var state: int = S.MENU
 var wave := 0
@@ -33,6 +38,10 @@ var zone_idx := 0
 var lifetime_kills := 0
 var outfit := 0
 var drops: Array = []
+var knock_cd := 0.0
+var turn_offer = null        # null or {"name": String, "t": float}
+var next_turn_in := randf_range(22.0, 40.0)
+var _hint_mode := ""
 
 var world
 var player
@@ -111,6 +120,13 @@ func start_run() -> void:
 	between_waves = true; wave_break = 1.5
 	wave_spawned = 0; wave_killed = 0
 	zone_idx = 0
+	knock_cd = 0.0
+	turn_offer = null
+	next_turn_in = randf_range(22.0, 40.0)
+	_hint_mode = ""
+	for g in world.slots:
+		if g.has_meta("knocked"):
+			g.remove_meta("knocked")
 	world.apply_zone(0)
 	state = S.RIDE
 	player.on_run_start()
@@ -173,6 +189,81 @@ func spawn_drop(pos: Vector3) -> void:
 	add_child(d)
 	d.position = Vector3(pos.x, 1.1, pos.z)
 	drops.append(d)
+
+func _set_hint(mode: String, text := "") -> void:
+	_hint_mode = mode
+	if mode == "":
+		hud.clear_hint()
+	else:
+		hud.hint(text)
+
+func _knock_target():
+	# nearest suburb slot group in reach, not yet knocked this run
+	if zone_idx != 0 or not player.on_foot or knock_cd > 0.0:
+		return null
+	var best = null
+	var best_d := 999.0
+	for g in world.slots:
+		if g.has_meta("knocked"):
+			continue
+		var d = absf(g.position.z)
+		if d < 6.0 and d < best_d:
+			best_d = d
+			best = g
+	return best
+
+func try_knock() -> void:
+	var g = _knock_target()
+	if g == null:
+		return
+	g.set_meta("knocked", true)
+	knock_cd = 12.0
+	_set_hint("")
+	_spawn_resident(g)
+	# staggered dialogue, then the reward
+	var line = RESIDENTS[randi() % RESIDENTS.size()]
+	get_tree().create_timer(0.3).timeout.connect(
+		func(): hud.floater("\"" + line + "\"", Color(0.9, 0.9, 1.0), 18))
+	var rw = randi() % 3
+	get_tree().create_timer(1.8).timeout.connect(func(): _knock_reward(rw))
+
+func _knock_reward(rw: int) -> void:
+	match rw:
+		0:
+			hud.floater("+1 INTEL", Color(0.6, 0.9, 1.0), 22)
+		1:
+			city_love = min(100.0, city_love + 20)
+			hud.floater("+20 CITY LOVE", Color(1.0, 0.85, 0.4), 22)
+		_:
+			city_love = min(100.0, city_love + 10)   # "+2 STARS" folded into city love
+			hud.floater("+2 STARS", Color.GOLD, 22)
+	hud.refresh()
+
+func _spawn_resident(g: Node3D) -> void:
+	var side = int(g.get_meta("side"))
+	var hx = float(g.get_meta("house_x", side * 20.0))
+	var r = Node3D.new()
+	add_child(r)
+	var model = Models.inst(Models.KAYKIT[randi() % Models.KAYKIT.size()])
+	if model == null:
+		r.queue_free()
+		return
+	Models.fit_height(model, 1.65)
+	r.add_child(model)
+	r.position = Vector3(hx - side * 4.0, 0, g.position.z + 1.5)
+	r.look_at(player.global_position * Vector3(1, 0, 1), Vector3.UP)
+	Models.play_anim(model, ["idle", "stand"])
+	get_tree().create_timer(8.0).timeout.connect(r.queue_free)
+
+func take_turn(dir: int) -> void:
+	if turn_offer == null:
+		return
+	hud.floater("TURNED ONTO " + turn_offer["name"], Color(0.6, 1.0, 0.6), 22)
+	player.turn_swing(dir)
+	world.apply_zone(randi() % world.ZONES.size())
+	turn_offer = null
+	_set_hint("")
+	next_turn_in = randf_range(22.0, 40.0)
 
 func save_game() -> void:
 	var cfg = ConfigFile.new()
@@ -263,6 +354,27 @@ func _process(delta: float) -> void:
 			player.set_weapon(d.get_meta("weapon"))
 			d.queue_free()
 			drops.remove_at(i)
+	# door knocks: suburb + on foot + slot in reach
+	knock_cd = maxf(0.0, knock_cd - delta)
+	if turn_offer == null:
+		if _knock_target() != null:
+			_set_hint("knock", "E — KNOCK ON THE DOOR")
+		else:
+			_set_hint("")
+	# side streets: intersection offer every 22-40s
+	if turn_offer != null:
+		turn_offer["t"] -= delta
+		if turn_offer["t"] <= 0.0:
+			turn_offer = null
+			_set_hint("")
+			next_turn_in = randf_range(22.0, 40.0)
+	else:
+		next_turn_in -= delta
+		if next_turn_in <= 0.0:
+			var nm = TURN_NAMES[randi() % TURN_NAMES.size()]
+			world.spawn_intersection(nm)
+			turn_offer = {"name": nm, "t": 4.0}
+			_set_hint("turn", "◀ A TURN LEFT · D TURN RIGHT ▶")
 	if _test:
 		_run_test(delta)
 
