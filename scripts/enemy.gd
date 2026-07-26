@@ -19,6 +19,8 @@ var rider: Node3D
 var bike: Node3D
 var stache: MeshInstance3D
 var alive := true
+var lunge_t := randf_range(3.0, 5.0)   # on-foot brawl: countdown to the next lunge
+var lunge_dash := 0.0                  # >0 while the lunge dash is in flight
 
 func setup(p_boss: bool, wave: int) -> void:
 	boss = p_boss
@@ -31,7 +33,7 @@ func setup(p_boss: bool, wave: int) -> void:
 func _mat(c: Color, rough := 0.5, metal := 0.0, emis := Color.BLACK, e := 0.0) -> StandardMaterial3D:
 	var m = StandardMaterial3D.new()
 	m.albedo_color = c; m.roughness = rough; m.metalness = metal
-	m.emission_enabled = e > 0; m.emission_energy_multiplier = e
+	m.emission_enabled = e > 0; m.emission = emis; m.emission_energy_multiplier = e
 	return m
 
 func _build() -> void:
@@ -111,6 +113,7 @@ func die() -> void:
 	Gore.blood_burst(get_parent(), head_pos, 90)
 	Gore.head_split(get_parent(), head_pos)
 	Gore.chunks(get_parent(), head_pos, 8)
+	main.music.sfx("kill")
 	main.on_enemy_killed(self)
 	if boss:
 		main.hud.floater("KILLER IS DEAD", Color.RED, 40)
@@ -131,17 +134,45 @@ func _taunt() -> void:
 	get_tree().create_timer(2.2).timeout.connect(l.queue_free)
 	get_tree().create_timer(8.0).timeout.connect(func(): taunted = false)
 
+func _lunge_telegraph() -> void:
+	# "!" flash over the punk right before the lunge lands
+	var l = Label3D.new()
+	l.text = "!"
+	l.font_size = 96
+	l.modulate = Color(1, 0.15, 0.1)
+	l.position = Vector3(0, 3.4, 0)
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	add_child(l)
+	get_tree().create_timer(0.5).timeout.connect(l.queue_free)
+
 func _process(delta: float) -> void:
 	if main.state != main.S.RIDE or not alive:
 		return
 	var wdt = delta
 	var on_foot_brawl = main.player.on_foot and not boss
 	if on_foot_brawl and position.z > -14:
-		# circle her like a pack
-		var ang = weave_phase * 0.5
-		var ring = Vector3(sin(ang) * 6.5, 0, -cos(ang) * 6.5 - 2)
-		position = position.lerp(ring, min(1.0, delta * 2))
-		look_at(main.player.global_position * Vector3(1, 0, 1), Vector3.UP)
+		if lunge_dash > 0.0:
+			# LUNGE — quick dash straight at her; connects within 3m
+			lunge_dash -= delta
+			var tgt = main.player.global_position * Vector3(1, 0, 1)
+			position = position.lerp(tgt, min(1.0, delta * 9.0))
+			look_at(tgt, Vector3.UP)
+			if position.distance_to(tgt) < 3.0:
+				main.on_player_rammed(8)   # god-mode handled there
+				main.music.sfx("ram")
+				lunge_dash = 0.0
+		else:
+			# circle her like a pack — and wind up the next lunge
+			weave_phase += wdt * 1.2
+			var ang = weave_phase * 0.5
+			var ring = Vector3(sin(ang) * 6.5, 0, -cos(ang) * 6.5 - 2)
+			position = position.lerp(ring, min(1.0, delta * 2))
+			look_at(main.player.global_position * Vector3(1, 0, 1), Vector3.UP)
+			lunge_t -= delta
+			if lunge_t <= 0.0:
+				lunge_t = randf_range(3.0, 5.0)
+				lunge_dash = 0.45
+				_lunge_telegraph()
 	else:
 		position.z += (11.0 + speed) * wdt
 		weave_phase += wdt * 2.4
@@ -149,6 +180,13 @@ func _process(delta: float) -> void:
 	if not taunted and not boss and position.z > -90 and position.z < -12 and randf() < wdt * 0.25:
 		_taunt()
 	if position.z > -1.5 and not on_foot_brawl:
+		# RAM — feedback (flash/shake/thud) fires inside on_player_rammed;
+		# the punk swerves off the road instead of just vanishing
+		alive = false
 		main.on_player_rammed(25 if boss else 11)
 		main.enemies.erase(self)
-		queue_free()
+		var off := 7.0 if position.x < 0.0 else -7.0
+		var tw = create_tween()
+		tw.tween_property(self, "position:x", position.x + off, 0.28)
+		tw.parallel().tween_property(self, "rotation:y", off * 0.12, 0.28)
+		tw.tween_callback(queue_free)

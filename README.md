@@ -8,22 +8,27 @@ Brooke was out cruising the neighborhood on her skateboard when two kids on dirt
 
 ## Features
 
+- **Proper start menu** — rider name (persisted in the save), full controls list, god-mode & third-person toggles, and lifetime stats
+- **In-game instruction cards** — staggered how-to cards on your first runs (touch gets its own wording)
+- **Click-to-aim + arrow-key aim fallback** — click once to lock the pointer ("AIM LOCKED"); arrow keys aim on trackpads/no-mouse setups, with a "CLICK TO AIM" nudge while the pointer is free
 - Auto-lock FPS combat
 - God mode
-- 8-arts brawl mode
+- 8-arts brawl mode — **now dangerous**: punks circle and lunge at her while she's on foot (telegraphed with a "!" flash)
 - Gore / head-split system
+- **Bosses on levels 5 & 10** — "KILLER IS DEAD" slow-mo kill-cams orbit the death spot
+- **Full SFX** — synthesized gunshots, gore/kill crunches, rams, pickups, outfit-unlock fanfares, door knocks, wave-clear arpeggios (headless-safe second audio generator)
 - 10 levels across suburb, farmland, and downtown zones
 - LED skateboard + white horse mounts
 - 5 unlockable outfits
 - Weapon drops
 - Opening cinematic
 - Procedural heavy-riff music
-- **Knock on houses** in the suburbs while on foot (E) — residents answer with intel, city love, or stars
-- **Side-street turns** — intersections appear ahead with green street signs; A/D to turn onto a new street
+- **Knock on houses** in the suburbs while on foot (E) — residents answer with intel, city love, or health
+- **Side-street turns on Q/E** — the turn offer arms as the intersection actually arrives (~3s out), so the keys match what you see; A/D stay dodge-only
+- **Pause & death screens fixed** — pause works while the tree is paused (clickable RESUME, R restarts from pause or death, M returns to menu from the death screen)
 - **Real GLB models** replace all primitives: characters, houses, weapons, bikes, the horse
 - **Full touch controls** — virtual joystick, drag-to-look, and on-screen buttons; playable on iPhone Safari at http://2.25.205.134/play/
-- **Third-person view of Brooke** (T key) — orbit camera behind her real rigged model
-- **Boss kill-cams** — slow-mo orbit around the death spot when a boss goes down
+- **Third-person view of Brooke** (T key) — orbit camera behind her real rigged model; can be set as the default from the menu
 - **macOS + Web builds now available** — see Prebuilt binaries below
 
 ## Real 3D assets
@@ -58,10 +63,10 @@ Exports: presets are included in `export_presets.cfg` (Linux, Windows, macOS, We
 
 ## Verifier
 
-Headless acceptance checks live in `verifier/`. To run the current suite (v4):
+Headless acceptance checks live in `verifier/`. To run the current suite (v6):
 
 ```sh
-verifier/v4/check.sh
+verifier/v6/check.sh
 ```
 
 Requires a Linux box with the headless Godot 4.3 binary available. See `verifier/README.md` for details.
