@@ -40,7 +40,7 @@ var did_title := false
 func _mat(c: Color, rough := 0.7, metal := 0.0, emis := Color.BLACK, e := 0.0) -> StandardMaterial3D:
 	var m = StandardMaterial3D.new()
 	m.albedo_color = c; m.roughness = rough; m.metalness = metal
-	m.emission_enabled = e > 0; m.emission = emis; m.emission_energy_multiplier = e
+	m.emission_enabled = e > 0; m.emission_energy_multiplier = e
 	return m
 
 func _ready() -> void:
@@ -317,6 +317,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		_skip()
+	elif event is InputEventScreenTouch and event.pressed:
+		_skip()   # touch screens (no keyboard) skip with a tap
 
 func _process(delta: float) -> void:
 	if finished:
